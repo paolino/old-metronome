@@ -3,13 +3,14 @@ Version:           0.1
 Synopsis:          Time Synchronized execution.
 Description:       Objects useful to execute actions at regular intervals
 License:           BSD3
+License-file:      LICENSE
 Category:          System
 Copyright:         (c) Paolo Veonelli, 2012
 Author:            Paolo Veronelli
 Maintainer:        paolo.veronelli@gmail.com
 Stability:         Experimental
 Homepage:          
-Tested-With:       GHC == 7.4.2
+Tested-With:       GHC == 7.4.1
 Build-Type:        Simple
 Cabal-Version:     >= 1.8
 
