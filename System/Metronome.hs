@@ -1,4 +1,4 @@
-{-# LANGUAGE DoRec #-}
+{-# LANGUAGE ExistentialQuantification, Rank2Types #-}
 
 -- | Control the synchronized execution of sequence of actions.
 --
@@ -37,29 +37,38 @@ data Control = Control {
         -- | eliminate client thread
         killC :: IO (),
         -- | mute the client actions, keeping it running
-        muteC :: IO (),
+        muteC :: STM (),
         -- | change the phase of the client in the metronome. Negatives are back jumps
-        step :: Integer -> IO (),
+        step :: Integer -> STM (),
+        -- | add new actions
+--        zipIn :: [Action] -> STM (),
         -- | clone this client
-        clone :: IO (Control)
+        clone :: IO Control
         }
 
 -- | Time between ticks in seconds
 type MTime = Double
 
+data Action = AIO {unAIO :: IO ()} | ASTM {unASTM :: STM ()}
+
+execute :: [Action] -> IO ()
+execute xs = let (ys,zs) = partition isSTM xs in atomically (sequence_ $ map unASTM ys) >> sequence_ (map unAIO zs) where
+        isSTM (ASTM _) = True
+        isSTM _  = False
+ 
 -- | Argument to define a new client for a metronome
-data Client = Client 
+data Client  = Client 
         {        frequency :: Integer -- ^ calling frequence on metronome ticks
         ,        precedence :: Double -- ^ precedence of this client , negatives higher
-        ,         actions        :: [IO ()] -- ^ sequence of actions to execute
+        ,        actions     :: [Action] -- ^ sequence of actions to execute
         ,        repetitions :: Maybe Integer -- ^ number of repetitions of the sequence of actions. Nothing loops for ever
         }
 
 -- | Metronome object
 data Metronome = Metronome {
         killM :: IO (), -- ^ eliminate this thread with all client threads created on it
-        client :: Client -> IO Control, -- ^ attach a new client
-        tempo :: (MTime -> MTime) -> IO () -- ^ modify metronome tempo
+        client :: Client -> IO Control , -- ^ attach a new client
+        tempo :: (MTime -> MTime) -> STM () -- ^ modify metronome tempo
         }
 
 
@@ -72,7 +81,7 @@ metronome d  = do
         r <- atomically $ newTVar []        --  actions scheduled for next tick 
         ts <- atomically $ newTVar []        -- threads id of attached clients 
         -- instantiation of a client
-        let new mc (Client m z fs mr) = do
+        let    new mc (Client m z fs mr) = do
                 let l = fromIntegral $ length fs -- number of actions , infinite lists demand Nothing in mr
                 kn <- atomically $ dupTChan k -- tick listener
                 -- state of the client thread, cloned is just resetting counter to modulo m to respect synchro, but reset sequence count, 
@@ -104,9 +113,9 @@ metronome d  = do
                         -- client killer
                         (killThread t>> atomically (modifyTVar ts (delete t))) 
                         -- mute/unmute flipping g
-                        (atomically $ readTVar kt >>= \(c,fs',g) -> writeTVar kt (c,fs',not g))
+                        (readTVar kt >>= \(c,fs',g) -> writeTVar kt (c,fs',not g))
                         -- dephase time
-                        (\n -> atomically $ readTVar kt >>= \(c,fs',g) -> writeTVar kt (c + n,fs',g))
+                        (\n -> readTVar kt >>= \(c,fs',g) -> writeTVar kt (c + n,fs',g))
                         -- clone
                         (atomically (readTVar kt) >>= \c -> new (Just c) (Client m z fs mr))
         -- time now
@@ -128,8 +137,8 @@ metronome d  = do
                         writeTVar r []
                         return rs
                 -- execute actions after ordering by precedence
-                sequence_ $ map snd . sortBy (comparing fst) $ rs
-                -- tick for all
+                execute $ map snd . sortBy (comparing fst) $ rs
+                                -- tick for all
                 atomically $ writeTChan k ()
         -- return the metronome controls
         return $ Metronome 
@@ -138,7 +147,7 @@ metronome d  = do
                 -- client creation
                 (new Nothing)  
                 -- rewrite scheduled ticks, from the second to come
-                (\f -> atomically $ do
+                (\f -> do
                         (t1:t2:_) <- readTVar kd
                         writeTVar kd $ [t1,t1 + (f $ t1 - t2) ..]
                         )
@@ -148,4 +157,5 @@ metronome d  = do
 
 
 
-        
+       
+ 
