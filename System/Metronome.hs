@@ -1,161 +1,165 @@
-{-# LANGUAGE ExistentialQuantification, Rank2Types #-}
+{-# LANGUAGE ExistentialQuantification, Rank2Types, TemplateHaskell #-}
 
--- | Control the synchronized execution of sequence of actions.
+-- | Client the synchronized execution of sequence of actions.
 --
--- > Metronome km nc ct <- metronome 0.5
---
--- create a ticking thread at 2 ticks per second
---
--- > ct (*(2/3))
---
--- change the frequency to 3 ticks per second
--- 
--- > Control kc mc sc cc <- nc (Client 2 0 [print 1, print 2, print 3] $ Just 20)
---
--- Start a client which execute an action every 2 ticks of the metronome, with precedence 0 inside this metronome. The 3 print actions are executed one at a time.
--- The sequence is executed 20 times
---
--- > Control kc2 mc2 sc2 cc2 <- nc (Client 3 (-1) [print "a", print "b", print "c"] $ Just 10)
---
--- Start a client which execute an action every 3 ticks of the metronome, with precedence (-1), higher than 0, inside this metronome.
--- When they race, every 6 ticks, letters will be printed before numbers
 module System.Metronome where
 
 
-import Sound.OpenSoundControl
-import Control.Concurrent.STM
-import Control.Concurrent
-import Control.Monad
-import Data.Ord
-import Data.List
-import Data.Maybe (isJust, fromJust)
+import Sound.OpenSoundControl (utcr, sleepThreadUntil)
+import Control.Concurrent.STM (STM, TVar, TChan , atomically, newTVar, readTVar, readTChan, writeTChan, modifyTVar, newBroadcastTChan, orElse, dupTChan)
+import Control.Concurrent (forkIO, myThreadId, killThread)
+import Control.Monad (join, liftM, forever, when)
+import Data.Ord (comparing)
+import Data.List (sortBy)
+import Data.Lens.Template
+import Data.Lens.Lazy
 
+import Debug.Trace
 
+-- | Client effect interface. Write in STM the collective and spit out the IO action to be executed when all STMs for this tick are done or retried
+type Action = STM (IO ())
 
--- | Client controls
-data Control = Control {
-        -- | eliminate client thread
-        killC :: IO (),
-        -- | mute the client actions, keeping it running
-        muteC :: STM (),
-        -- | change the phase of the client in the metronome. Negatives are back jumps
-        step :: Integer -> STM (),
-        -- | add new actions
---        zipIn :: [Action] -> STM (),
-        -- | clone this client
-        clone :: IO Control
+-- | Priority values between clients under the same metronome.
+type Precedence = Double
+
+-- execute actions, from STM to IO ignoring retriers
+execute :: [Action] -> IO ()
+execute = join . liftM sequence_ . atomically . mapM (`orElse` return (return ()))
+
+-- | state of the client exposed in a TVar to be modified at will.
+data Client = Client {        
+        -- | the number of ticks elapsed from  the client start
+        _sync :: Integer,
+        -- | calling frequency relative to ticks frequency
+        _frequency :: Integer,
+        -- | the next actions scheduled
+        _actions :: [Action],
+        -- | priority among peers
+        _priority :: Precedence,
+        -- | muted flag
+        _muted :: Bool
         }
+$( makeLens ''Client)
+-- | supporting values with 'running' and 'alive' flag
+data Object a = Object {
+        -- | stopped or running
+        _running :: Bool,
+        -- | set to false to require object gc
+        _alive :: Bool,
+        -- | core data
+        _core :: a
+        }
+        
+$( makeLens ''Object)
+
+
+
+mute x = md x $	core ^%= muted ^%= not 
+stop x = md x $	running ^= False
+kill x = md x $	alive ^= False
+run x = md x $ running ^= True
+
+-- | class to uniform IO and STM in reading and modifying TVars
+class RdMd m where
+        -- | read a TVar
+        rd :: TVar a -> m a 
+        -- | modify a TVar
+        md :: TVar a -> (a -> a) -> m ()
+	-- | new TVar
+	nv :: a -> m (TVar a)
+
+-- | write a TVar
+wr :: RdMd m => TVar a -> a -> m ()
+wr x = md x . const 
+
+instance RdMd STM where
+        rd = readTVar
+        md x = modifyTVar x
+	nv = newTVar
+instance RdMd IO  where
+        rd = atomically . rd
+        md x = atomically . md x
+	nv = atomically . newTVar
 
 -- | Time between ticks in seconds
 type MTime = Double
 
-data Action = AIO {unAIO :: IO ()} | ASTM {unASTM :: STM ()}
-
-execute :: [Action] -> IO ()
-execute xs = let (ys,zs) = partition isSTM xs in atomically (sequence_ $ map unASTM ys) >> sequence_ (map unAIO zs) where
-        isSTM (ASTM _) = True
-        isSTM _  = False
- 
--- | Argument to define a new client for a metronome
-data Client  = Client 
-        {        frequency :: Integer -- ^ calling frequence on metronome ticks
-        ,        precedence :: Double -- ^ precedence of this client , negatives higher
-        ,        actions     :: [Action] -- ^ sequence of actions to execute
-        ,        repetitions :: Maybe Integer -- ^ number of repetitions of the sequence of actions. Nothing loops for ever
-        }
-
--- | Metronome object
+-- | Metronome is the list of times for the next ticks
 data Metronome = Metronome {
-        killM :: IO (), -- ^ eliminate this thread with all client threads created on it
-        client :: Client -> IO Control , -- ^ attach a new client
-        tempo :: (MTime -> MTime) -> STM () -- ^ modify metronome tempo
+        ticks :: [MTime],        -- ^ next ticking times
+        schedule :: [(Precedence, Action)], -- ^ actions to be run on next tick
+        clock :: TChan ()        -- ^ ticking channel
         }
 
-
-
--- | A fresh  metronome
-metronome         :: MTime -- ^ tick tack time
-                -> IO Metronome        -- ^ a metronome object
-metronome d  = do
-        k <- atomically newBroadcastTChan -- a not leaking chan for ticking
-        r <- atomically $ newTVar []        --  actions scheduled for next tick 
-        ts <- atomically $ newTVar []        -- threads id of attached clients 
-        -- instantiation of a client
-        let    new mc (Client m z fs mr) = do
-                let l = fromIntegral $ length fs -- number of actions , infinite lists demand Nothing in mr
-                kn <- atomically $ dupTChan k -- tick listener
-                -- state of the client thread, cloned is just resetting counter to modulo m to respect synchro, but reset sequence count, 
-                -- muting and functions respected
-                kt <- atomically . newTVar $ maybe (0,cycle fs,True) (\(t,fs',g) -> (t `mod` m,fs',g)) mc
-                -- client core, recursive to kill the thread
-                t <- forkIO . forever $ do  
-                                t <- myThreadId
-                                join . atomically $ do 
-                                        readTChan kn -- wait for a tick
-                                        (n,fss@(f:fs''),g) <- readTVar kt -- read state
-                                        -- check for end of thread. isJust checked before length for infinite list
-                                        if isJust mr && (n `div` (l * m)) == fromJust mr 
-                                                then return $ killThread t
-                                                else  do 
-                                                        -- check if it's time to fire
-                                                        fs' <- if n `mod` m == 0 
-                                                        -- fire if it's not muted
-                                                                then when g (modifyTVar r $ ((z,f):)) >> return fs'' 
-                                                                -- else don't consume
-                                                                else return fss
-                                                        -- update client thread state
-                                                        writeTVar kt $ (n + 1, fs',g)
-                                                        return $ return ()
-                -- add the thread id to the metronome
-                atomically . modifyTVar ts $ (t:)
-                -- return the control structure for the client
-                return $ Control 
-                        -- client killer
-                        (killThread t>> atomically (modifyTVar ts (delete t))) 
-                        -- mute/unmute flipping g
-                        (readTVar kt >>= \(c,fs',g) -> writeTVar kt (c,fs',not g))
-                        -- dephase time
-                        (\n -> readTVar kt >>= \(c,fs',g) -> writeTVar kt (c + n,fs',g))
-                        -- clone
-                        (atomically (readTVar kt) >>= \c -> new (Just c) (Client m z fs mr))
-        -- time now
+-- | Make a new metronome  given a ticking time in seconds. This will use a 'BroadcastTChan' which doesn't leak.
+mkMetronome :: MTime -> IO Metronome
+mkMetronome d = do
+        k <- atomically newBroadcastTChan -- a not leaking ochan for ticking
         t0 <- utcr
-        -- schedule next ticks
-        kd <- atomically $ newTVar [t0, (t0 + d) ..]
-        -- metronome core thread
-        t <- forkIO . forever $ do
-                -- consume a tick time
-                t <- atomically $ do
-                        (t:ts') <- readTVar kd
-                        writeTVar kd ts'
-                        return t
-                -- sleep to it
-                sleepThreadUntil t
-                -- load actions to execute and reset
-                rs <- atomically $ do
-                        rs <- readTVar r
-                        writeTVar r []
-                        return rs
-                -- execute actions after ordering by precedence
-                execute $ map snd . sortBy (comparing fst) $ rs
-                                -- tick for all
-                atomically $ writeTChan k ()
-        -- return the metronome controls
-        return $ Metronome 
-                -- kill cesar and the filistei
-                (killThread t >> atomically (readTVar ts) >>= mapM_ killThread) 
-                -- client creation
-                (new Nothing)  
-                -- rewrite scheduled ticks, from the second to come
-                (\f -> do
-                        (t1:t2:_) <- readTVar kd
-                        writeTVar kd $ [t1,t1 + (f $ t1 - t2) ..]
-                        )
+        return $ Metronome [t0, t0 + d .. ] [] k
+
+-- helper to modify an 'Object' fulfilling 'running' and 'alive' flags. 
+runObject :: (Monad m, RdMd m) => TVar (Object a) -> m () -> (a -> m a) -> m ()
+runObject  ko  kill modify = do
+        -- read the object
+        Object running alive x <- rd ko
+        if not alive then kill 
+                else when running $ do 
+                        -- modify as requested
+                        x' <- modify x 
+                        -- write the object
+                        md ko $ modL core $ const x'
+
+-- forkIO for objects  
+forkIO' :: (IO () -> IO ()) -> IO ()
+forkIO' f = forkIO (myThreadId >>= f . killThread) >> return ()
+
+-- | boot a client based on a metronome and its state
+bootClient :: TVar (Object Metronome) -> TVar (Object Client) -> IO ()
+bootClient tm tc = forkIO' $ \kill -> do 
+        -- read metronome state
+        Metronome _ ss kc  <- _core `liftM` rd tm
+        -- make new clock listener
+        kn <- atomically $ dupTChan kc 
+        forever $ do
+                atomically $ readTChan kn -- wait for a tick
+                runObject tc kill $ \(Client n m fss z g) -> do
+                        -- check if it's time to fire
+                        let (ss',fs') = if null fss then (ss,fss) 
+				else let f:fs'' = fss in if n `mod` m == 0 
+                                	-- fire if it's not muted
+                                	then if g then ((z,f):ss,fs'') 
+                                		-- else don't consume
+                                		else (ss,fs'')
+					else (ss,fss)
+			md tm $ \(Object ru li (Metronome ts ss kc)) -> Object ru li (Metronome ts ss' kc)
+                        -- the new Client with one more tick elapsed and the actions left to run
+                        return $ Client (n + 1) m fs' z g
+
+-- | boot a metronome from its state. Use 'mkMetronome' to make a standard one. 
+bootMetronome :: TVar (Object Metronome) -> IO ()
+bootMetronome km  = forkIO' $ \kill ->  forever . runObject km kill $ \m@(Metronome ts _ _) -> do
+                t <- utcr -- time now
+                -- throw away the past ticking time
+                case dropWhile (< t) ts of
+                        [] -> return m  -- no ticks left to wait
+                        t':ts' -> do 
+                                -- sleep until next
+                                sleepThreadUntil t'
+                                -- execute scheduled actions after ordering by priority
+				Metronome _ rs kc <- _core `liftM` rd km
+                                execute . map snd . sortBy (comparing fst) $ rs
+                                -- broadcast tick for all client to schedule next actions
+                                atomically $ writeTChan kc ()
+                                -- the new Metronome with times in future and no actions scheduled 
+                                return $ Metronome ts' [] kc
+
+ 
+
+
+
+
         
-                
-
-
-
-
-       
+             
+      
  
