@@ -1,12 +1,22 @@
 {-# LANGUAGE ScopedTypeVariables, MultiParamTypeClasses, FlexibleInstances #-}
 
--- | unifying operation names of TVar's and TChans in STM and IO via atomically
+-- | 
+-- Module      :  Control.Concurrent.STMOrIO
+-- Copyright   :  (c) Paolo Veronelli 2012
+-- License     :  BSD-style (see the file LICENSE)
+-- 
+-- Maintainer  :  paolo.veronelli@gmail.com
+-- Stability   :  unstable
+-- Portability :  not portable (requires STM)
+--
+-- Unifying functions of TVar's and TChans in STM and IO via atomically.
+--
 module Control.Concurrent.STMOrIO where
 
 import Control.Concurrent.STM
 
 -- | uniforming class for STM or IO
-class STMOrIO m where
+class (Functor m, Monad m) => STMOrIO m where
         stmorio :: STM a -> m a
 instance STMOrIO IO where
         stmorio = atomically

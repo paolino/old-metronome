@@ -1,12 +1,47 @@
-{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FlexibleContexts, ScopedTypeVariables, FlexibleInstances, UndecidableInstances #-}
+{-# LANGUAGE TemplateHaskell, FlexibleContexts #-}
 
--- | Synchronized execution of sequences of actions, controlled in STM.
+-- | 
+-- Module      :  System.Metronome
+-- Copyright   :  (c) Paolo Veronelli 2012
+-- License     :  BSD-style (see the file LICENSE)
+-- 
+-- Maintainer  :  paolo.veronelli@gmail.com
+-- Stability   :  unstable
+-- Portability :  not portable (requires STM)
+--
+-- /Synchronized execution of sequences of actions, controlled in STM/
+--
+-- All data structures are made accessible via "Data.Lens" abstraction.
+--
+-- Actions to be executed are of type 'Action' = STM (IO ()). At each tick, the scheduled actions are ordered by priority, 
+-- binded as STM actions ignoring the retrying ones. The results, being IO actions are executed in that order.
+--
+-- Every 'Track' and 'Metronome' lives in its own thread and can be stopped or killed as such, setting a flag in its state. 
+--
+-- Track and metronome state are exposed in TVar value to be modified at will. The only closed and inaccessible value is the synchronizing channel, 
+-- written by the metronome and waited by tracks.
+-- The 'TrackForker' returned by a metronome function is closing this channel and it's the only way to fork a track.
+-- 
+-- See "System.Metronome.Practical" for an simple wrapper around this module.
+--
 module System.Metronome  (
         -- * Data structures
                   Track (..)
         ,         Thread (..)
         ,         Metronome (..)
+        -- * Lenses
+        ,         sync
+        ,         frequency
+        ,         actions
+        ,         priority
+        ,         muted
+        ,         running
+        ,         alive
+        ,         core
+        ,         ticks
+        ,         schedule
         -- * Synonyms
+        ,         Control
         ,         Priority
         ,         Frequency
         ,         Ticks
@@ -72,7 +107,7 @@ data Thread a = Thread {
         
 $( makeLens ''Thread)
 
--- | A Thread value cell
+-- | A Thread value cell in STM
 type Control a = TVar (Thread a)
 
 -- | Time, in seconds
@@ -80,11 +115,13 @@ type MTime = Double
 
 -- | State of a metronome
 data Metronome = Metronome {
-        ticks :: [MTime],        -- ^ next ticking times
-        schedule :: [(Priority, Action)] -- ^ actions scheduled for the tick to come
+        _ticks :: [MTime],        -- ^ next ticking times
+        _schedule :: [(Priority, Action)] -- ^ actions scheduled for the tick to come
         }
 
--- | The action to fork a new track from a metronome.
+$( makeLens ''Metronome)
+
+-- | The action to fork a new track from a track state.
 type TrackForker = Control Track -> IO ()
 
 -- helper to modify an 'Thread' fulfilling 'running' and 'alive' flags. 
@@ -126,8 +163,9 @@ forkTrack kc tm tc = forkIO' $ \kill -> do
 
 
 
--- | Fork a metronome from its initial state. A channel to output ticks is closed in the returned TrackForker 
-metronome :: Control Metronome -> IO TrackForker
+-- | Fork a metronome from its initial state
+metronome       :: Control Metronome -- ^ initial state 
+                -> IO TrackForker  
 metronome km  = do
                 kc <- atomically newBroadcastTChan -- non leaking channel
                 forkIO' $ \kill ->  forever . runThread km kill $ \m@(Metronome ts _) -> do

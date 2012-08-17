@@ -1,7 +1,7 @@
 Name:              metronome
 Version:           0.1
 Synopsis:          Time Synchronized execution.
-Description:       Objects useful to execute actions at regular intervals
+Description:       Metronome and tracks, useful to execute IO actions at regular intervals. State exposed via STM.
 License:           BSD3
 License-file:      LICENSE
 Category:          System
@@ -10,7 +10,7 @@ Author:            Paolo Veronelli
 Maintainer:        paolo.veronelli@gmail.com
 Stability:         Experimental
 Homepage:          
-Tested-With:       GHC == 7.4.1
+Tested-With:       GHC == 7.4.2
 Build-Type:        Simple
 Cabal-Version:     >= 1.8
 
@@ -23,7 +23,7 @@ Library
                    data-lens-template
 
   GHC-Options:     -Wall -fwarn-tabs
-  Exposed-modules: System.Metronome, Control.Concurrent.STMOrIO
+  Exposed-modules: System.Metronome, Control.Concurrent.STMOrIO, System.Metronome.Practical
   Other-modules:   
 
 source-repository head
