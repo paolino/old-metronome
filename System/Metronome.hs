@@ -36,10 +36,8 @@ module System.Metronome  (
         ,         priority
         ,         muted
         ,         running
-        ,         alive
         ,         core
         ,         ticks
-        ,         schedule
         -- * Synonyms
         ,         Control
         ,         Priority
@@ -47,24 +45,33 @@ module System.Metronome  (
         ,         Ticks
         ,         Action
         ,         MTime
-        ,         TrackForker
         -- * API
         ,         metronome
+	,	  add 
+	,	  delete
+	,	  modify
+	,	  modifyM
+	,	  list
         ) where
 
-
+import Prelude hiding ((.),id)
 import Sound.OpenSoundControl (utcr, sleepThreadUntil)
 import Control.Concurrent.STM (STM, TVar, TChan , atomically, newBroadcastTChan, orElse, dupTChan)
-import Control.Concurrent (forkIO, myThreadId, killThread)
-import Control.Monad (join, liftM, forever, when)
+import Control.Concurrent (forkIO, myThreadId, killThread, ThreadId)
+import Control.Monad (join, liftM, forever, filterM, when)
 import Data.Ord (comparing)
-import Data.List (sortBy)
+import Data.List (sortBy, mapAccumL)
+import Data.Maybe (catMaybes)
 import Data.Lens.Template (makeLens)
-import Data.Lens.Lazy (modL)
+import Data.Lens.Lazy -- (modL, getL, setL)
 import Control.Concurrent.STMOrIO
+import Control.Monad.Reader (ReaderT, runReaderT)
+import Control.Category
+-- | Time, in seconds
+type MTime = Double
 
 -- | Track effect interface. Write in STM the collective and spit out the IO action to be executed when all STMs for this tick are done or retried
-type Action = STM (IO ())
+type Action = ReaderT MTime STM (IO ())
 
 -- | Priority values between tracks under the same metronome.
 type Priority = Double
@@ -75,12 +82,11 @@ type Frequency = Integer
 -- | Number of elapsed ticks
 type Ticks = Integer
 
--- execute actions, from STM to IO ignoring retriers
-execute :: [Action] -> IO ()
-execute = join . liftM sequence_ . atomically . mapM (`orElse` return (return ()))
 
 -- | State of a track.
-data Track = Track {        
+data Track a = Track {   
+	-- | track identifier     
+	_identifier :: a,
         -- | the number of ticks elapsed from  the track fork
         _sync :: Ticks,
         -- | calling frequency relative to metronome ticks frequency
@@ -100,8 +106,6 @@ data Thread a = Thread {
         -- | stopped or running flag
         _running :: Bool,
         -- | set to false to require kill thread
-        _alive :: Bool,
-        -- | core data
         _core :: a
         }
         
@@ -110,83 +114,95 @@ $( makeLens ''Thread)
 -- | A Thread value cell in STM
 type Control a = TVar (Thread a)
 
--- | Time, in seconds
-type MTime = Double
 
 -- | State of a metronome
-data Metronome = Metronome {
+data Metronome a = Metronome {
         _ticks :: [MTime],        -- ^ next ticking times
-        _schedule :: [(Priority, Action)] -- ^ actions scheduled for the tick to come
+        _tracks :: [Control (Track a)] -- ^ actions scheduled for the tick to come
         }
 
 $( makeLens ''Metronome)
 
--- | The action to fork a new track from a track state.
-type TrackForker = Control Track -> IO ()
-
--- helper to modify an 'Thread' fulfilling 'running' and 'alive' flags. 
-runThread :: (Monad m, RW m TVar) => Control a -> m () -> (a -> m a) -> m ()
-runThread  ko  kill modify = do
-        -- read the object
-        Thread r al x <- rd ko
-        if not al then kill 
-                else when r $ do 
-                        -- modify as requested
-                        x' <- modify x 
-                        -- write the object
-                        md ko $ modL core $ const x'
-
--- forkIO with kill thread 
-forkIO' :: (IO () -> IO ()) -> IO ()
-forkIO' f = forkIO (myThreadId >>= f . killThread) >> return ()
 
 --  fork a track based on a metronome and the track initial state
-forkTrack :: TChan () -> Control Metronome -> Control Track -> IO ()
-forkTrack kc tm tc = forkIO' $ \kill -> do 
-        -- make new metronome listener
-        kn <- atomically $ dupTChan kc 
-        forever $ do
-                rd kn -- wait for a tick
-                runThread tc kill $ \(Track n m fss z g) -> atomically $ do
-                        Thread ru li (Metronome ts ss) <- rd tm
+step :: Track a -> (Track a, (Priority,Action))
+step (Track s n m fs z g) = 
                         -- check if it's time to fire
-                        let (ss',fs') = if null fss then (ss,fss) 
-                                else let f:fs'' = fss in if n `mod` m == 0 
-                                        -- fire if it's not muted
-                                        then if not g then ((z,f):ss,fs'') 
-                                                -- else don't consume
-                                                else (ss,fs'')
-                                        else (ss,fss)
-                        wr tm $ Thread ru li (Metronome ts ss')
-                        -- the new Track with one more tick elapsed and the actions left to run
-                        return $ Track (n + 1) m fs' z g
+                        let 	(f,fs')= if null fs then (return $ return (),fs)
+                                	else let f:fs' = fs in if n `mod` m == 0 
+						then (f,fs') else (return $ return (),fs)
+                        	-- the new Track with one more tick elapsed and the actions left to run
+                        in (Track s (n + 1) m fs' z g, (z,if not g then return $ return () else f))
 
+stepRunning :: [Control (Track a)] -> IO [Maybe (Priority, Action)]
+stepRunning = mapM $ \tx -> atomically $ do 
+		x <- rd tx
+		let (x',mpa) = if running ^$ x 
+			then let (tr,pa) = step $ core ^$ x in (core ^= tr $ x, Just pa)
+			else (x,Nothing)
+		wr tx x'
+		return mpa
+
+--  execute actions, from STM to IO ignoring retriers
+execute :: MTime -> [Action] -> IO ()
+execute t  = join . liftM sequence_ . atomically  . mapM (\f -> runReaderT f t `orElse` return (return ()))
+
+-- | tick a metronome 
+tick :: MTime -> Control (Metronome a) -> IO ()
+tick t cm = select cm (const True) >>= stepRunning >>= execute t . map snd . sortBy (comparing fst) . catMaybes
+
+-- ! select tracks from a metronome 
+select :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m [Control (Track a)]
+select cm z = rd cm >>= \m -> filterM (fmap (z . (identifier . core ^$)) . rd) (tracks . core ^$ m) 
 
 
 -- | Fork a metronome from its initial state
-metronome       :: Control Metronome -- ^ initial state 
-                -> IO TrackForker  
-metronome km  = do
-                kc <- atomically newBroadcastTChan -- non leaking channel
-                forkIO' $ \kill ->  forever . runThread km kill $ \m@(Metronome ts _) -> do
-                        t <- utcr -- time now
-                        -- throw away the past ticking time
-                        case dropWhile (< t) ts of
-                                [] -> return m  -- no ticks left to wait
-                                t':ts' -> do 
-                                        -- sleep until next
-                                        sleepThreadUntil t'
-                                        -- execute scheduled actions after ordering by priority
-                                        Metronome _ rs  <- _core `liftM` rd km
-                                        execute . map snd . sortBy (comparing fst) $ rs
-                                        -- broadcast tick for all track to schedule next actions
-                                        wr kc ()
-                                        -- the new Metronome with times in future and no actions scheduled 
-                                        return $ Metronome ts' [] 
-                return $ forkTrack kc km
+metronome       :: Control (Metronome a) -- ^ initial state 
+                -> IO ThreadId
+metronome cm  = forkIO . forever $ do
+	-- test running state
+	run  <- (running ^$) `fmap` rd cm
+	when run $ do 
+              	t <- utcr -- time now
+		mt <- atomically $ do
+			-- read next ticks
+			ts <- (ticks . core ^$) `fmap` rd cm
+			-- throw away the past ticks
+			case dropWhile (< t) ts of
+				[] -> return Nothing  -- no ticks left to wait
+				t':ts' -> do 
+					-- update ticks
+					md cm (ticks . core ^= ts') 
+					-- return next tick
+					return $ Just t'
+		flip (maybe $ return ()) mt $ \t' ->  do
+			-- sleep until next tick
+			sleepThreadUntil t' 
+			-- execute the tracks at t'
+			tick t' cm
+                
+-- | add a track to a metronome
+add :: STMOrIO m =>  Control (Metronome a) -> Control (Track a) -> m ()
+add cm ct = md cm $ tracks . core ^%= (ct:)
 
- 
 
+-- | delete selected tracks from metronome
+delete :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m ()
+delete cm z = do
+	ts <- select cm (not . z) 
+	md cm $ (tracks . core ^= ts) 
+
+-- | modify selected tracks
+modify :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> (Track a -> Track a) -> m ()
+modify cm z f = select cm z >>= mapM_ (flip md $ core ^%= f)
+
+-- | modify selected tracks monadically
+modifyM :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> (Track a -> m (Track a)) -> m ()
+modifyM cm z f = select cm z >>= mapM_ (flip mdM $ core ^%%= f)
+
+-- | list selected tracks
+list :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m [Track a]
+list cm z = select cm z >>= mapM (fmap (core ^$) . rd)
 
 
 

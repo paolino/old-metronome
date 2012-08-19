@@ -1,3 +1,5 @@
+{-# LANGUAGE IncoherentInstances #-}
+
 -- | 
 -- Module      :  System.Metronome.Practical
 -- Copyright   :  (c) Paolo Veronelli 2012
@@ -68,6 +70,8 @@ module System.Metronome.Practical (
         ,       noIO 
         ) where
 
+import Prelude hiding ((.),id)
+import Control.Category
 import Control.Concurrent.STMOrIO
 import Control.Concurrent.STM
 import Sound.OpenSoundControl
@@ -80,64 +84,63 @@ noIO f = f >> return (return ())
 
 -- | kill a thread
 kill :: STMOrIO m => Control a -> m ()
-kill x = md x $ alive `setL` False
+kill x = md x $ alive ^= False
 
 -- | stop a thread
 stop :: STMOrIO m => Control a -> m ()
-stop x = md x $ running `setL` False
+stop x = md x $ running ^= False
 
 -- | run a thread
 run :: STMOrIO m => Control a -> m ()
-run x = md x $ running `setL` True
+run x = md x $ running ^= True
 
 -- | invert the running flag of a thread 
 modRunning ::        STMOrIO m => Control a -> m ()
-modRunning x = md x $ running `modL` not
+modRunning x = md x $ running ^%= not
 
 -- | set the next  ticking times for a metronome
 setTicks :: STMOrIO m => Control Metronome -> [MTime] -> m ()
-setTicks x = md x . modL core . setL ticks
+setTicks x = md x . setL (ticks . core)
 
 -- | change the actions scheduled for the next metronome tick
 modScheduled :: STMOrIO m => Control Metronome -> ([(Priority,Action)] -> [(Priority, Action)]) -> m ()
-modScheduled x = md x . modL core . modL schedule
+modScheduled x = md x . modL (schedule . core) 
  
 -- | modify the ticks count from track start, shifting the next ticks relative to metronome ticks
 modPhase :: STMOrIO m => Control Track -> (Ticks -> Ticks) -> m ()
-modPhase x = md x . modL core . modL  sync
+modPhase x = md x . modL (sync . core)
 
 -- | set the track frequency
 setFrequency  :: STMOrIO m => Control Track -> Frequency -> m ()
-setFrequency x = md x . modL core . setL frequency
+setFrequency x = md x . setL (frequency . core) 
 
 -- | set the track actions
 setActions :: STMOrIO m => Control Track -> [Action] -> m ()
-setActions x = md x . modL core . setL actions
+setActions x = md x . setL (actions . core)
 
 -- | read the remaining actions of a track
 getActions :: STMOrIO m => Control Track -> m [Action]
-getActions x = (getL actions . getL core) `fmap` rd x
+getActions x = (getL $ actions . core) `fmap` rd x
 
 -- | set a track priority
 setPriority :: STMOrIO m => Control Track -> Priority -> m ()
-setPriority x = md x . modL core . setL priority
+setPriority x = md x . setL (priority . core)
 
 -- | mute / unmute a track
 modMute ::  STMOrIO m => Control Track  -> m ()
-modMute x = md x . modL core $ muted `modL` not
+modMute x = md x $ muted . core  ^%= not
 
 -- | create and fork a running metronome.
 dummyMetronome  :: MTime        -- ^ time between ticks, in seconds
                  -> IO (Control Metronome, TrackForker) -- ^ metronome control structure and a function to fork tracks
 dummyMetronome d = utcr >>= \t0 -> var (Thread True True $ Metronome [t0, t0 + d ..] []) >>= \m -> metronome m >>= \f -> return (m,f)
 
--- | create and fork a stopped track by a metronome
+-- | create and fork a running track by a metronome
 dummyTrack      :: TrackForker  -- ^ a track forking action from a metronome fork
                 -> Frequency    -- ^ ratio of track ticks and metronome ticks
                 -> Priority     -- ^ priority among the track peers
-                -> [Action]     -- ^ actions to be executed, each on a separate track tick
                 -> IO (Control Track) -- ^ track control structure
-dummyTrack tf fr pr as = var  (Thread False True $ Track 0 fr as pr False) >>= \t -> tf t >> return t
+dummyTrack tf fr pr  = var  (Thread True True $ Track 0 fr [] pr False) >>= \t -> tf t >> return t
 
 
 

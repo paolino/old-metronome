@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables, MultiParamTypeClasses, FlexibleInstances #-}
+{-# LANGUAGE IncoherentInstances #-}
 
 -- | 
 -- Module      :  Control.Concurrent.STMOrIO
@@ -14,6 +15,7 @@
 module Control.Concurrent.STMOrIO where
 
 import Control.Concurrent.STM
+import Control.Monad.Trans
 
 -- | uniforming class for STM or IO
 class (Functor m, Monad m) => STMOrIO m where
@@ -33,7 +35,7 @@ class RW m z where
 -- | modify a cell z under STM or IO
 md :: (Monad m, RW m z) => z a -> (a -> a) -> m ()
 md x f = rd x >>= \y -> wr x (f y)
-
+mdM x f = rd x >>= f >>= wr x
 instance STMOrIO t => RW t TVar where
         rd = stmorio . readTVar
         wr x = stmorio . writeTVar x
@@ -42,6 +44,9 @@ instance STMOrIO t => RW t TChan where
         rd = stmorio . readTChan
         wr x = stmorio . writeTChan x
 
+instance (MonadTrans m, STMOrIO t) => RW (m t) TVar where
+	rd = lift . rd
+	wr x = lift . wr x
 
 -- | new TVar 
 var :: STMOrIO m 
