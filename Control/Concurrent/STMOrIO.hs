@@ -34,8 +34,12 @@ class RW m z where
 
 -- | modify a cell z under STM or IO
 md :: (Monad m, RW m z) => z a -> (a -> a) -> m ()
-md x f = rd x >>= \y -> wr x (f y)
+md x f = rd x >>= wr x . f 
+
+-- | modify a cell z under STM or IO, monadically
+mdM :: (Monad m, RW m z) => z a -> (a -> m a) -> m ()
 mdM x f = rd x >>= f >>= wr x
+
 instance STMOrIO t => RW t TVar where
         rd = stmorio . readTVar
         wr x = stmorio . writeTVar x
@@ -45,8 +49,8 @@ instance STMOrIO t => RW t TChan where
         wr x = stmorio . writeTChan x
 
 instance (MonadTrans m, STMOrIO t) => RW (m t) TVar where
-	rd = lift . rd
-	wr x = lift . wr x
+        rd = lift . rd
+        wr x = lift . wr x
 
 -- | new TVar 
 var :: STMOrIO m 

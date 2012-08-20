@@ -20,7 +20,8 @@ Library
                    hosc >= 0.11,
                    stm >= 2.4,
                    data-lens,
-                   data-lens-template
+                   data-lens-template,
+                   mtl >= 2.1.2
 
   GHC-Options:     -Wall -fwarn-tabs
   Exposed-modules: System.Metronome, Control.Concurrent.STMOrIO, System.Metronome.Practical
