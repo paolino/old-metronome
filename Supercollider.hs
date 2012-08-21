@@ -6,18 +6,19 @@ module Supercollider where
 import Control.Monad.Random hiding (fromList)
 
 import Data.Ratio 
-import Data.List
+import Data.List hiding (insert)
 import Prelude hiding ((.))
 import Data.Map (Map, insert, fromList, assocs, update, adjust)
 import Data.Monoid
 import Control.Monad.Reader
-
+import Data.Ord (comparing)
 import System.Metronome.Practical
 import System.Metronome
 
 import System.Metronome (Action, MTime)
 import Control.Concurrent.STMOrIO
 import Control.Concurrent.STM
+import Control.Concurrent
 import Sound.SC3.ID (withSC3, send, g_new, d_recv, synthdef, out , mce, control, Rate (..), sinOsc, envGen, DoneAction (..), envPerc, s_new, AddAction (AddToTail))
 import Sound.OpenSoundControl 
 import Data.Lens.Lazy
@@ -83,17 +84,22 @@ eval d Pause = [Left d]
 eval d (Split n xs) = xs >>= eval (d/fromIntegral n)
 
 
-scatter :: (Functor m, MonadRandom m) => Double -> Int -> m [Double]
-scatter l n = do
+type Scatter m = Double -> Int -> m [Double]
+
+scatterR :: (Functor m, MonadRandom m) => Double -> Int -> m [Double]
+scatterR l n = do
         xs <- (sort . take (n - 1))  `fmap` getRandomRs (0,l)
         return $ zipWith (flip (-)) (0:xs) $ xs ++ [l]
 
-evalScatter :: (Functor m, MonadRandom m) => Rational -> Double -> Ritmo -> m [Either Rational (Rational,Double)]
-evalScatter d p Play = return [Right (d,p)]
-evalScatter d p Pause = return [Left d]
-evalScatter d p (Split n xs) = do
+
+scatterS l n = return $ replicate n $ l/fromIntegral n
+
+evalScatter :: (Functor m, MonadRandom m) => Scatter m -> Rational -> Double -> Ritmo -> m [Either Rational (Rational,Double)]
+evalScatter _ d p Play = return [Right (d,p)]
+evalScatter _ d p Pause = return [Left d]
+evalScatter scatter d p (Split n xs) = do
         ps <- scatter p n 
-        fmap concat . mapM (uncurry $ evalScatter (d/fromIntegral n)) $ zip ps xs
+        fmap concat . mapM (uncurry $ evalScatter scatter (d/fromIntegral n)) $ zip ps xs
 
 
 	
@@ -108,18 +114,44 @@ randomSplit n (Split m xs) = do
         let (bs,x:cs) = splitAt k xs
         (Split m . (bs ++) . (++ cs) . return) `fmap` randomSplit n x 
                  
-randomRitmo2 :: (Functor m, MonadRandom m) => Int -> Double -> m [Either Duration (Duration, Double)]
+randomRitmo2 :: (Functor m, MonadRandom m) => Scatter m -> Int -> Double -> m [Either Duration (Duration, Double)]
 
-randomRitmo2 n p = foldM (\x _ -> randomSplit 2 x) Play [1..n] >>= evalScatter 1 p
+randomRitmo2 scatter n p = foldM (\x _ -> randomSplit 2 x) Play [1..n] >>= evalScatter scatter 1 p
 
 assignP :: (Double -> Action) -> [Either Duration (Duration, Double)] -> [(Duration,Action)]
 assignP f = map . either (\t -> (t,return $ return ())) . second $ f
 
-randomAction :: (Functor m, MonadRandom m) => Int -> Double -> (Double -> Action) -> m [(Duration , Action)]
-randomAction n p fp = assignP fp `fmap` randomRitmo2 n p
+randomAction :: (Functor m, MonadRandom m) => Scatter m -> Int -> Double -> (Double -> Action) -> m [(Duration , Action)]
+randomAction scatter n p fp = assignP fp `fmap` randomRitmo2 scatter n p
 
-	
+stringMetronome :: MTime -> IO (Control (Metronome String), ThreadId)
+stringMetronome = mkMetronome
 
+
+isSplit (Split _ _) = True
+isSplit _ = False
+
+
+randomCollapse :: (MonadRandom m, Functor m) => Ritmo -> m Ritmo
+randomCollapse Pause = return Pause
+randomCollapse Play = return Play
+randomCollapse (Split m xs) 
+        | all (not . isSplit) xs = pp `fmap` getRandom
+        | otherwise = do
+                let (rs,is) = partition (isSplit . snd) $ zip [0 ..] xs
+                n <- getRandomR (0, length xs -1)
+                let (rs',r:rs'') = splitAt n rs
+                r' <- randomCollapse (snd r)
+                return $ Split m . map snd $ sortBy (comparing fst) $ (n,r'):rs'++ rs'' ++ is
+
+
+
+bootBinary ntracks pace subd = do
+        let ticks = 2 ^ subd
+        (m,kt) <- mkMetronome $ pace/ fromIntegral ticks 
+        ts <- mapM (\i -> mkTrack i m ticks (ntracks - i) []) [1 .. ntracks]
+        return (m,kt,ts)
+        
 -- > {-# LANGUAGE DoRec #-}
 -- > 
 -- > import System.IO

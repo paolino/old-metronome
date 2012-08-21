@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell, FlexibleContexts, Rank2Types #-}
 
 -- | 
 -- Module      :  System.Metronome
@@ -57,7 +57,7 @@ module System.Metronome  (
 
 import Prelude hiding ((.))
 import Sound.OpenSoundControl (utcr, sleepThreadUntil)
-import Control.Concurrent.STM (STM, TVar,atomically, orElse)
+import Control.Concurrent.STM (STM, TVar,atomically, orElse,retry)
 import Control.Concurrent (forkIO, ThreadId)
 import Control.Monad (join, liftM, forever, filterM, when, guard)
 import Data.Ord (comparing)
@@ -90,6 +90,7 @@ type Frequency = Integer
 type Ticks = Integer
 
 type Duration = Rational
+
 
 -- | State of a track.
 data Track a = Track {   
@@ -141,7 +142,7 @@ dropT = actions ^%= tail
 -- update a track state, always add a tick, 
 step :: Track a -> (Track a, Maybe (Priority,Action))
 step t@(Track _ _ _ _ [] _) = (resetT 0 t, Nothing)
-step t@(Track _ n m z ((tk ,f):_) g) 
+step t@(Track _ n m z ((tk ,f):_) g ) 
         | n <= 0 = (resetT (tk * fromIntegral m - 1) . dropT $ t, guard (not g) >> return (z,f)) 
         | otherwise = (tickT t, Nothing)
 
@@ -157,7 +158,7 @@ stepRunning = mapM $ \tx -> atomically $ do
 
 --  execute actions, from STM to IO ignoring retriers
 execute :: MTime -> [Action] -> IO ()
-execute t  = join . liftM sequence_ . atomically  . mapM (\f -> runReaderT f t `orElse` return (return ()))
+execute t  = join . liftM (mapM_ forkIO) .  atomically  . mapM (\f -> runReaderT f t `orElse` return (return ()))
 
 -- tick a metronome 
 tick :: MTime -> Control (Metronome a) -> IO ()
@@ -173,10 +174,10 @@ forkMetronome   :: Control (Metronome a) -- ^ initial state
                 -> IO ThreadId
 forkMetronome cm  = forkIO . forever $ do
         -- test running state
-        run  <- (running ^$) `fmap` rd cm
-        when run $ do 
                 t <- utcr -- time now
                 mt <- atomically $ do
+                        run <- (running ^$) `fmap` rd cm 
+                        when (not run) $ retry
                         -- read next ticks
                         ts <- (ticks . core ^$) `fmap` rd cm
                         -- throw away the past ticks
