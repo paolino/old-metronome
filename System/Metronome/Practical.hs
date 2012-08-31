@@ -66,7 +66,7 @@ mkMetronome d = do
 -- | new standard track, running attached to a metronome
 mkTrack :: STMOrIO m => a -> Control (Metronome a) -> Frequency -> Priority -> [(Duration, Action)] -> m (Control (Track a))
 mkTrack n m f p as = do
-        t <- var (Thread True $ Track n 0 f p as False) 
+        t <- var (Thread True $ Track n 0 f p as False []) 
         add m t
         return t
 

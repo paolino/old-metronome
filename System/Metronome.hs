@@ -42,7 +42,9 @@ module System.Metronome  (
         ,         actions
         ,         priority
         ,         muted
+        ,       future
         -- * Synonyms
+        ,       Schedule
         ,       Duration
         ,         Control
         ,         Priority
@@ -92,6 +94,9 @@ type Ticks = Integer
 type Duration = Rational
 
 
+type Schedule = [(Duration,Action)] 
+
+
 -- | State of a track.
 data Track a = Track {   
         -- | track identifier     
@@ -103,9 +108,11 @@ data Track a = Track {
         -- | priority of this track among its peers
         _priority :: Priority,
         -- | the actions left to be run
-        _actions  :: [(Duration,Action)],
+        _actions  :: Schedule,
         -- | muted flag, when True, actions are not scheduled, just skipped
-        _muted :: Bool
+        _muted :: Bool,
+        -- | next actions
+        _future :: [Schedule]
         }
 
 $( makeLens ''Track)
@@ -141,10 +148,11 @@ dropT = actions ^%= tail
 
 -- update a track state, always add a tick, 
 step :: Track a -> (Track a, Maybe (Priority,Action))
-step t@(Track _ _ _ _ [] _) = (resetT 0 t, Nothing)
-step t@(Track _ n m z ((tk ,f):_) g ) 
+step t@(Track _ _ _ _ [] _ []) = (tickT t, Nothing)
+step t@(Track _ _ _ _ [] _ (x:xs'')) = step ((actions ^= x) . (future ^= xs'') $ t)
+step t@(Track _ n m z ((tk ,f):rs) g _) 
         | n <= 0 = (resetT (tk * fromIntegral m - 1) . dropT $ t, guard (not g) >> return (z,f)) 
-        | otherwise = (tickT t, Nothing)
+        | otherwise =  (tickT t, Nothing)
 
 -- atomically update a thread track if running
 stepRunning :: [Control (Track a)] -> IO [Maybe (Priority, Action)]
