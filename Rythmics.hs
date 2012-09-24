@@ -1,9 +1,10 @@
 {-# LANGUAGE DeriveFunctor, DeriveTraversable, DeriveFoldable #-}
 
-module Rytmics where
+module Rythmics where
 
+import Prelude hiding (foldr)
 import Data.Ratio
-import Data.List
+import Data.List hiding (foldr)
 import Control.Arrow
 import Data.Traversable
 import Data.Foldable
@@ -13,14 +14,22 @@ data Relative
 
 type R b a = (Rational, a)
 
-data L a = L (R Relative a) | Mappend (L a) (L a) | Mix (L a) (L a) | Shift Rational (L a) | EP deriving (Functor, Show, Read, Traversable,Foldable)
+data L a = Event (R Relative a) | Mappend (L a) (L a) | Merge (L a) (L a) | Pause Rational deriving (Functor, Show, Read, Traversable,Foldable)
+
+
+total :: L a -> Rational
+total (Pause r) = r
+total (Event (r,_)) = r
+total (Mappend x y) = total x + total y
+total (Merge x y) = total x + total y
+
+normalize xs = (1/total xs) `mul` xs 
 
 mul :: Rational -> L a -> L a
-mul r EP = EP
-mul r (L (r',x)) = L (r'*r,x)
+mul r (Pause r') = (Pause $ r * r')
+mul r (Event (r',x)) = Event (r'*r,x)
 mul r (Mappend x y) = Mappend (r `mul` x) (r `mul` y)
-mul r (Mix x y) = Mix (r `mul` x) (r `mul` y)
-mul r (Shift s x) = Shift (r * s) (r `mul` x)
+mul r (Merge x y) = Merge (r `mul` x) (r `mul` y)
 
 mix :: [R Absolute a] -> [R Absolute a] -> [R Absolute a]
 mix [] x = x
@@ -31,12 +40,11 @@ mix (x@(tx,_):xs) (y@(ty,_):ys)
 
 
 instance Monad L where
-        return x = L (1,x)
-        EP >>= _ = EP
-        L (t,x) >>= f = t `mul` f x
+        return x = Event (1,x)
+        Pause r >>= _ = Pause r
+        Event (t,x) >>= f = t `mul` f x
         Mappend x y >>= f = (x >>= f) `Mappend` (y >>= f)
-        Mix x y >>= f = (x >>= f) `Mix` (y >>= f)
-        Shift s x >>= f = Shift s (x >>= f)
+        Merge x y >>= f = (x >>= f) `Merge` (y >>= f)
 
 -- | the Rational value is the offset after last event
 data P a = P Rational [R Absolute a] deriving Show
@@ -46,15 +54,14 @@ mkP r (Mappend x y) =
                 let P r' xs = mkP r x 
                     P r'' ys =  mkP r' y
                 in P r'' $ xs ++ ys
-mkP r (Mix x y) = let 
+mkP r (Merge x y) = let 
         P rx xs = mkP r x
         P ry ys = mkP r y
         in P (max rx ry) $ mix xs ys
-mkP r (Shift r' x) = mkP (r + r') x
-mkP r (L x) = P (r + fst x) [(r,snd x)]
-mkP r EP = P r []
+mkP r (Event x) = P (r + fst x) [(r,snd x)]
+mkP r (Pause r') = P (r + r') []
 
 many :: [R Relative a] -> L a
-many [] = EP
-many (x:xs) = Mappend (L x) (many xs)
+many [] = Pause 0
+many (x:xs) = Mappend (Event x) (many xs)
 

@@ -26,34 +26,27 @@
 module System.Metronome  (
         -- * Data structures
                   Track (..)
-        ,         Thread (..)
         ,         Metronome (..)
-        ,         Rythm (..)
         -- * Lenses
-        -- ** Thread
-        ,         running
-        ,         core
         -- ** Metronome 
         ,         ticks
         ,         tracks
         -- ** Track
         ,         identifier
         ,         phase
-        ,         frequency
+        ,         width 
         ,         actions
         ,         priority
         ,         muted
         ,       future
         -- * Synonyms
-        ,       Pattern
-        ,       Duration
         ,         Control
         ,         Priority
-        ,         Frequency
         ,         Ticks
         ,         Action
         ,         MTime
         -- * API
+        ,         emptyTrack
         ,         forkMetronome
         ,         select
         -- * Test
@@ -62,7 +55,7 @@ module System.Metronome  (
 
 import Prelude hiding ((.))
 import Sound.OpenSoundControl (utcr, sleepThreadUntil)
-import Control.Concurrent.STM (STM, TVar,atomically, orElse,retry)
+import Control.Concurrent.STM (STM, TVar,atomically, orElse,retry, newTVar)
 import Control.Concurrent (forkIO, ThreadId)
 import Control.Monad (join, liftM, forever, filterM, when, guard)
 import Data.Ord (comparing)
@@ -75,7 +68,8 @@ import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Category ((.))
 import Data.Ratio
 import Debug.Trace
-import Rythmycs
+import Rythmics
+
 -- | Time, in seconds
 type MTime = Double
 
@@ -89,86 +83,71 @@ ignore = return $ return ()
 -- | Priority values to order tracks action.
 type Priority = Double
 
--- | Number of metronome ticks between two track ticks
-type Frequency = Integer
 
 -- | Number of elapsed ticks
 type Ticks = Integer
-
-type Duration = Rational
-
-
-type Pattern a = [(a,Action)] 
-type Schedule = Pattern Integer
-
-type Phase = Integer
-data Rythm = Rythm Phase (Pattern Duration)
 
 -- | State of a track.
 data Track a = Track {   
         -- | track identifier     
         _identifier :: a,
         -- | phase factor 
-        _phase :: Integer,
-        -- | next event position
-        _frequency :: Integer,
+        _phase :: Ticks,
+        _width :: Ticks,
         -- | priority of this track among its peers
         _priority :: Priority,
         -- | the actions left to be run
-        _actions  :: Schedule,
+        _actions  :: P Action,
         -- | muted flag, when True, actions are not scheduled, just skipped
         _muted :: Bool,
         -- | next actions
-        _future :: [Rythm]
+        _future :: [L Action]
         }
 
 $( makeLens ''Track)
 
--- | supporting values with 'running' and 'alive' flag
-data Thread a = Thread {
-        -- | stopped or running flag
-        _running :: Bool,
-        -- | set to false to require kill thread
-        _core :: a
-        }
-        
-$( makeLens ''Thread)
+emptyTrack :: a -> Ticks -> Priority -> Track a
+emptyTrack i w p = Track i 0 w p (schedule w 0 $ Pause 1) False []
+
+
+schedule :: Ticks ->  Ticks -> L Action -> P Action
+schedule w c l = mkP (c%1) ((w%1) `mul` normalize l) where
+
+step :: Ticks -> Track a -> (Track a,[(Priority,Action)])
+step mc (Track s p w z pas@(P t _) g fs) = let
+        c = mc + p
+        (P t' as',fs') =  if t <= fromIntegral c then case fs of
+                                [] -> (schedule w c $ Pause 1,[]) 
+                                (as':fs') -> (schedule w c as',fs') 
+                                else (pas,fs)
+        (ps,as'') = partition ((<= fromIntegral c) . fst) as'
+        tr = Track s p w z (P t' as'') g fs'
+        in (tr,if g then [] else zip (repeat z) (map snd ps))
 
 
 -- | A Thread value cell in STM
-type Control a = TVar (Thread a)
+type Control a = TVar a
 
 -- | State of a metronome
 data Metronome a = Metronome {
-        _ticks :: [(Integer,MTime)],        -- ^ next ticking times
+        _ticks :: [(Ticks,MTime)],        -- ^ next ticking times
         _tracks :: [Control (Track a)] -- ^ actions scheduled for the tick to come
         }
 
 $( makeLens ''Metronome)
 
-schedule :: Integer -> Integer -> Rythm -> Schedule 
-schedule m c (Rythm p xs) = snd . mapAccumL (\d' (d,x) -> (d' + d,(c + p + floor (d' * fromIntegral m) ,x))) 0 $ xs
-
-step :: Integer -> Track a -> (Track a,[(Priority,Action)])
-step mc t@(Track s p m z as g fs) = let
-        c = mc + p
-        (as',fs') = if c `mod` m == 0 then case fs of
-                [] -> (as,fs) 
-                (as':fs') -> (schedule m c as',fs') 
-                else (as,fs)
-        (ps,as'') = partition ((<= c) . fst) as'
-        t' = Track s p m z as'' g fs'
-        in (t',if g then [] else zip (repeat z) (map snd ps))
         
 -- atomically update all thread tracks
-stepRunning :: Integer -> [Control (Track a)] -> STM [(Priority, Action)]
-stepRunning mc = fmap concat . mapM f where
+update :: Ticks -> [Control (Track a)] -> STM [(Priority, Action)]
+update mc = fmap concat . mapM f where
         f tx = do 
+                -- read the track
                 x <- rd tx
-                let (x',mpa) = if running ^$ x 
-                        then let (tr,mpa') = step mc (core ^$ x) in (core ^= tr $ x, mpa')
-                        else (x,[])
+                -- step it 
+                let (x',mpa) = step mc x 
+                -- write the new track
                 wr tx x'
+                -- return actions
                 return mpa
 
 --  execute actions, from STM to IO ignoring retriers
@@ -176,18 +155,10 @@ execute :: MTime -> [Action] -> IO ()
 execute t  = join . liftM (mapM_ forkIO) .  atomically  . mapM (\f -> runReaderT f t `orElse` return (return ()))
 
 -- tick a metronome 
-tick :: (Integer, MTime) -> Control (Metronome a) -> IO ()
-tick (mc, t) cm = select cm (const True) >>= atomically . stepRunning mc >>= execute t . map snd . sortBy (comparing fst) 
+tick :: (Ticks, MTime) -> Control (Metronome a) -> IO ()
+tick (mc, t) cm = select cm (const True) >>= atomically . update mc >>= execute t . map snd . sortBy (comparing fst) 
 
--- ! select tracks from a metronome 
-select :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m [Control (Track a)]
-select cm z = rd cm >>= \m -> filterM (fmap (z . (identifier . core ^$)) . rd) (tracks . core ^$ m) 
 
-runA :: Action -> IO ()
-runA x = do
-        t <- utcr
-        execute t [x]
----- ********************************* stopping metronome is bugged ******************************
 -- | Fork a metronome from its initial state
 forkMetronome   :: Control (Metronome a) -- ^ initial state 
                 -> IO ThreadId
@@ -195,16 +166,14 @@ forkMetronome cm  = forkIO . forever $ do
         -- test running state
                 t <- utcr -- time now
                 mt <- atomically $ do
-                        run <- (running ^$) `fmap` rd cm 
-                        when (not run) $ retry
                         -- read next ticks
-                        ts <- (ticks . core ^$) `fmap` rd cm
+                        ts <- (ticks ^$) `fmap` rd cm
                         -- throw away the past ticks
                         case dropWhile ((< t) . snd ) ts of
                                 [] -> return Nothing  -- no ticks left to wait
                                 t':ts' -> do 
                                         -- update ticks
-                                        md cm (ticks . core ^= ts') 
+                                        md cm (ticks ^= ts') 
                                         -- return next tick
                                         return $ Just t'
                 flip (maybe $ return ()) mt $ \t' ->  do
@@ -217,5 +186,14 @@ forkMetronome cm  = forkIO . forever $ do
 
         
              
+-- ! select tracks from a metronome 
+select :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m [Control (Track a)]
+select cm z = rd cm >>= \m -> filterM (fmap (z . (identifier  ^$)) . rd) (tracks  ^$ m) 
+
+-- | test an action
+runA :: Action -> IO ()
+runA x = do
+        t <- utcr
+        execute t [x]
       
  

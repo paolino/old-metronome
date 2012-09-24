@@ -43,62 +43,47 @@ import Data.Lens.Lazy
 noIO :: STM () -> STM (IO ())
 noIO f = f >> return (return ())
 
--- | stop a thread
-stop :: STMOrIO m => Control a -> m ()
-stop x = md x $ running ^= False
-
--- | run a thread
-run :: STMOrIO m => Control a -> m ()
-run x = md x $ running ^= True
-
 
 -- | new empty running metronome, given its ticking time
 mkMetronome :: MTime -> IO (Control (Metronome a), ThreadId)
 mkMetronome d = do 
         t0 <- utcr 
-        m <- var (Thread True $ Metronome (zip [0..] [t0, t0 + d ..]) []) 
+        m <- var (Metronome (zip [0..] [t0, t0 + d ..]) []) 
         t <- forkMetronome m 
         return (m,t)
 
 -- | new standard track, running attached to a metronome
-mkTrack :: STMOrIO m => a -> Control (Metronome a) -> Frequency -> Priority -> Rythm -> m (Control (Track a))
-mkTrack n m f p as = do
-        t <- var (Thread True $ Track n 0 f p [] False [as]) 
-        add m t
+mkTrack :: STMOrIO m => a -> Ticks -> Priority -> Control (Metronome a) -> m (Control (Track a))
+mkTrack i w p cm = do
+        t <- var $ emptyTrack i w p
+        add cm t
         return t
 
 
 
 -- | add a track to a metronome
 add :: STMOrIO m =>  Control (Metronome a) -> Control (Track a) -> m ()
-add cm ct = md cm $ tracks . core ^%= (ct:)
+add cm ct = md cm $ tracks ^%= (ct:)
 
 
 -- | delete selected tracks from metronome
 delete :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m ()
 delete cm z = do
         ts <- select cm (not . z) 
-        md cm $ (tracks . core ^= ts) 
+        md cm $ (tracks ^= ts) 
 
 -- | modify selected tracks
 modify :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> (Track a -> Track a) -> m ()
-modify cm z f = select cm z >>= mapM_ (flip md $ core ^%= f)
+modify cm z f = select cm z >>= mapM_ (flip md f)
 
 -- | modify selected tracks monadically
 modifyM :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> (Track a -> m (Track a)) -> m ()
-modifyM cm z f = select cm z >>= mapM_ (flip mdM $ core ^%%= f)
+modifyM cm z f = select cm z >>= mapM_ (flip mdM f)
 
 -- | list selected tracks
 list :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m [Track a]
-list cm z = select cm z >>= mapM (fmap (core ^$) . rd)
+list cm z = select cm z >>= mapM rd
 
-randevu :: Track a -> Integer
-randevu t = (frequency ^$ t) - ((phase ^$ t) `mod` (frequency ^$ t))
-
-
-
-futureSyncTrack :: Track a -> [Rythm] -> Track a -> Track a
-futureSyncTrack ts as = (phase ^= negate (randevu ts)) . (future ^= as) 
 
 -- | State of a track.
 data InfoTrack a = InfoTrack {   
@@ -107,7 +92,7 @@ data InfoTrack a = InfoTrack {
         -- | the number of ticks elapsed from  the track fork
         _phase_ :: Integer,
         -- | ticks to next event 
-        _frequency_ :: Integer,
+        _width_ :: Integer,
         -- | priority of this track among its peers
         _priority_ :: Priority,
         -- | the actions left to be run
@@ -115,7 +100,7 @@ data InfoTrack a = InfoTrack {
         } deriving Show
 
 mkInfoTrack :: Track a -> InfoTrack a 
-mkInfoTrack t = InfoTrack (identifier ^$ t) (phase ^$ t) (frequency ^$ t) (priority ^$ t) (muted ^$ t) 
+mkInfoTrack t = InfoTrack (identifier ^$ t) (phase ^$ t) (width ^$ t) (priority ^$ t) (muted ^$ t) 
 
 info m = list m (const True) >>= return . map mkInfoTrack
 
