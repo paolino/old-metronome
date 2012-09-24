@@ -3,11 +3,11 @@
 module Supercollider where
 
 
-import Control.Monad.Random hiding (fromList)
-
+import Control.Monad.Random hiding (fromList, MonadRandom)
+import Control.Applicative
 import Data.Ratio 
-import Data.List hiding (insert, concat,all)
-import Prelude hiding ((.), mapM, concat,all)
+import Data.List hiding (insert, concat,all, concatMap,sum)
+import Prelude hiding ((.),mapM, concat,all,concatMap,sum)
 import Data.Map (Map, insert, fromList, assocs, update, adjust)
 import Data.Monoid
 import Data.Traversable
@@ -22,10 +22,14 @@ import Control.Concurrent.STMOrIO
 import Control.Concurrent.STM
 import Control.Concurrent
 import Sound.SC3 -- (withSC3, send, g_new, d_recv, synthdef, out , mce, control, Rate (..), sinOsc, envGen, DoneAction (..), envPerc, s_new, AddAction (AddToTail))
+import Sound.SC3.UGen.Noise.ID 
 import Sound.OpenSoundControl 
 import Data.Lens.Lazy
-import Control.Category
-import Control.Arrow (second)
+import Control.Arrow 
+import Ritmo
+import Data.Random
+import Data.Random.Distribution.Categorical (categorical)
+import Control.Category ((.))
 
 -- udp sending
 cs = withSC3 . flip send 
@@ -37,7 +41,7 @@ tcs x = ask >>= \t -> lift . return . cs . Bundle (UTCr t) . return $ x
 addGroup1 = cs $ g_new [(1, AddToTail, 0)]
 
 -- add a stereo synth
-addSynth name = cs . d_recv . synthdef name . out (mce [0,1])
+addSynth name = cs . d_recv . synthdef name . out 0
 
 -- control parameter
 par = control KR 
@@ -57,49 +61,71 @@ percV = var $ fromList [(attacco,0.01),(discesa,0.5),(amp,0.2)]
 type MP = Map String Double
 type Params = TVar MP
 
-infixl 9 # 
-(#) = (,)
-
-infixl 8 *>
-(*>) :: STMOrIO m => (MP -> MP) -> Params -> m ()
-(*>)= flip md 
-
 (*^) :: Int -> [a] -> [a]
 n *^ xs = concat $ replicate n xs
 
 inf = (*^) maxBound 
 
--- a suonaer
 suona :: String -> Params -> Action
 suona name fs = rd fs >>= tcs . s_new name (-1) AddToTail 1 . assocs
+
+type R = Ritmo (Bool,Duration)
+
+ritmi :: IO [R]                        
+ritmi = do evalRandomIO . iterateM (walk f g) $ Leaf (True,1) where
+                f (t,d) = do 
+                        mk <- runRVar (categorical [(1::Float, \_ -> Nothing),(if d > 1%32 then 4 else 0,Just)]) StdRandom
+                        mk `fmap` replicateM 2 (runRVar (categorical  [(1::Float,(False,d / 2)),(1.5,(True,d / 2))]) StdRandom)
+                g ds =  do
+                        p <- runRVar (categorical  [(1::Float,False),(2,True)]) StdRandom
                         
+                        runRVar (categorical [(if snd (head ds) > 1%4 then 0 else 1, Just (p,sum $ map snd ds)),(1::Float,Nothing)]) StdRandom 
+        
+
+addPause :: (Applicative m, MonadRandom m) => Ritmo Duration -> m (Ritmo (Bool,Duration))
+addPause =  traverse (\x -> runRVar (categorical  [(1::Float,(False,x)),(2,(True,x))]) StdRandom)
+bootBinary ntracks pace subd = do
+        let ticks = 2 ^ subd
+        (m,kt) <- mkMetronome $ pace/ fromIntegral ticks 
+        ts <- mapM (\i -> mkTrack i m ticks (ntracks - i) []) [1 .. ntracks]
+        return (m,kt,ts)
 
 
-data Ritmo a = Play a | Pause a | Split Int [Ritmo a] deriving (Show,Traversable, Functor, Foldable)
-data Or a = L a | R a deriving (Show,Functor)
+boot = do 
+        addGroup1
+        let s r =  klankSpec ([r 80,120,158]) [1,1,1,1] [1,1,1,1]
+        addSynth "klank" $ dynKlank (impulse AR 2 0 * 0.4) 1 0 1 (s (* control KR "rate" 1)) * perc 
+        addSynth "noise" $ whiteNoise 'a' AR * perc 
+        addSynth "s" $ sine "f1" * sine "f2" * perc
 
-orring f g (L x) = f x
-orring f g (R x) = g x
 
-leaf d True = Play (R d)
-leaf d False = Pause (L d) 
-leafN k d n
-        | n < k = Play (R d)
-        | otherwise = Pause (L d)
-type R = Ritmo (Or Rational)
+applica :: (Duration -> Action) -> R -> Schedule
+applica f = map (\(t,x) -> (x,if t then lift . noIO $ return () else f x)) . toList
 
-randomSplit :: (MonadRandom m, Functor m) => Int -> R -> m R
-randomSplit _ (Pause (L d)) = fmap (leafN 4 d) $ getRandomR (1::Int,4)
-randomSplit n (Play (R d)) = fmap (Split n) . fmap (map (leaf $ d / fromIntegral n)) $ replicateM n getRandom
-randomSplit n (Split m xs) = do 
-        k <- getRandomR (0,m - 1)
-        let (bs,x:cs) = splitAt k xs
-        (Split m . (bs ++) . (++ cs) . return) `fmap` randomSplit n x 
-                 
-randomRitmo :: (Functor m, MonadRandom m) => Rational -> Int -> m R
-randomRitmo k n = foldM (\x _ -> randomSplit 2 x) (leaf k True) [1..n] 
+mo x f = lift . noIO $ md x f
 
+piece = do 
+        boot
+        (m,km,[t1,t2,t3,t4,t5]) <- bootBinary 5 4 7 
+        v <- percV
+        map (applica (\x -> suona "klank" v)) `fmap` ritmi >>= md t1 . (future . core ^=)
+        map (applica (\x -> lift . noIO . md v $ insert "rate" $ 1 + fromRational x)) `fmap` ritmi >>= md t3 . (future . core ^=)
+        map (applica (\x -> lift . noIO . md v $ insert "amp" $ min 0.5 (8*fromRational x))) `fmap` ritmi >>= md t2 . (future . core ^=)
+        return $ killThread km
+        
 {-
+t1 t1 v = schedule (const $ suona "bass" v) v 2 15 >>= \ts -> md t1 (future . core ^= inf [ts])
+t2 t2 v = schedule (\x -> mo v $ insert "amp" (0.1 + fromRational x)) v 4 40 >>= \ts -> md t2 (future . core ^= inf [ts])
+t3 t3 v =  schedule (\x -> mo v $ insert "rate" (1 + fromRational x)) v 5 50 >>= \ts -> md t3 (future . core ^= inf [ts])
+syncem t1 t2 = atomically $ do
+        s <- rd t2 $ System.Metronome.sync . core 
+        md t1 $ System.Metronome.sync . core ^= s
+        
+-}
+{-
+(m,km,[t1,t2,t3,t4,t5]) <- bootBinary 5 1 7 
+v <- percV
+md t1 $ future . core ^= [4 *^ [(1%16,suona "s" v)], 4 *^ [(1%16,suona "s" v)] ]
 
 type Scatter m = Double -> Int -> m [Double]
 
@@ -114,7 +140,7 @@ scatterS l n = return $ replicate n $ l/fromIntegral n
 evalScatter :: (Functor m, MonadRandom m) => Scatter m -> Rational -> Double -> Ritmo a -> m [Either Rational (Rational,Double)]
 evalScatter _ d p Play = return [Right (d,p)]
 evalScatter _ d p Pause = return [Left d]
-evalScatter scatter d p (Split n xs) = do
+evalScatter scatter d p (Subd n xs) = do
         ps <- scatter p n 
         fmap concat . mapM (uncurry $ evalScatter scatter (d/fromIntegral n)) $ zip ps xs
 
@@ -128,92 +154,21 @@ stringMetronome :: MTime -> IO (Control (Metronome String), ThreadId)
 stringMetronome = mkMetronome
 
 
-isSplit (Split _ _) = True
-isSplit _ = False
+isSubd (Subd _ _) = True
+isSubd _ = False
 
 
 randomCollapse :: (MonadRandom m, Functor m) => Ritmo -> m Ritmo
 randomCollapse Pause = return Pause
 randomCollapse Play = return Play
-randomCollapse (Split m xs) 
-        | all (not . isSplit) xs = pp `fmap` getRandom
+randomCollapse (Subd m xs) 
+        | all (not . isSubd) xs = pp `fmap` getRandom
         | otherwise = do
-                let (rs,is) = partition (isSplit . snd) $ zip [0 ..] xs
+                let (rs,is) = partition (isSubd . snd) $ zip [0 ..] xs
                 n <- getRandomR (0, length rs -1)
                 let (rs',r:rs'') = splitAt n rs
                 r' <- randomCollapse (snd r)
-                return $ Split m . map snd $ sortBy (comparing fst) $ (n,r'):rs'++ rs'' ++ is
-
-ritmoStream x = do
-        x' <- randomSplit 2 x
-        x'' <- randomCollapse x'
-        xs <- ritmoStream x''
-        return $ x' : x'' : xs
+                return $ Subd m . map snd $ sortBy (comparing fst) $ (n,r'):rs'++ rs'' ++ is
 
 -}
--- randomRitmo2 scatterS 30 10
-bootBinary ntracks pace subd = do
-        let ticks = 2 ^ subd
-        (m,kt) <- mkMetronome $ pace/ fromIntegral ticks 
-        ts <- mapM (\i -> mkTrack i m ticks (ntracks - i) []) [1 .. ntracks]
-        return (m,kt,ts)
-
-
-boot = do 
-        addGroup1
-        cs $ b_allocRead 1 "/home/paolino/Music/bass.wav" 0 0
-        let s r =  klankSpec (map r [80,120,158]) [1,1,1,1] [1,1,1,1]
-        addSynth "klank" $ dynKlank (impulse AR 2 0 * 0.1) 1 0 1 (s (* control KR "rate" 1)) * perc 
-        addSynth "s" $ sine "f1" * sine "f2" * perc
-        addSynth "bass" $ playBuf 2 AR 1 (control KR "rate" 1) 0 0 NoLoop RemoveSynth * perc
-
-pausa = lift . noIO $ return ()
-mo x  = lift . noIO . md x 
-schedule a v ns t = map (orring (\x -> (x,pausa)) (\x -> (x,a x))) `fmap` toList `fmap` randomRitmo ns t :: IO Schedule
-t1 t1 v = schedule (const $ suona "bass" v) v 2 15 >>= \ts -> md t1 (future . core ^= inf [ts])
-t2 t2 v = schedule (\x -> mo v $ insert "amp" (0.1 + fromRational x)) v 4 40 >>= \ts -> md t2 (future . core ^= inf [ts])
-t3 t3 v =  schedule (\x -> mo v $ insert "rate" (1 + fromRational x)) v 5 50 >>= \ts -> md t3 (future . core ^= inf [ts])
-
-syncem t1 t2 = atomically $ do
-        s <- rd t2 $ System.Metronome.sync . core 
-        md t1 $ System.Metronome.sync . core ^= s
-        
-{-
-(m,km,[t1,t2,t3,t4,t5]) <- bootBinary 5 1 7 
--}
-{-
-v <- percV
-md t1 $ future . core ^= [4 *^ [(1%16,suona "s" v)], 4 *^ [(1%16,suona "s" v)] ]
-
-audition $ out 0 $ suonaBuf 2 AR 1 (control KR "rate" 1) 0 0 NoLoop RemoveSynth * (control KR "amp" 1)
-
-
--}
--- > {-# LANGUAGE DoRec #-}
-
-
-
-
--- > 
--- > import System.IO
--- > import System.Metronome.Practical
--- > import Control.Concurrent.STMOrIO
--- > import Control.Monad
--- > ghc force garbage collection
--- > main = do schedule (\x -> mo v $ insert "rate" (1 + fromRational x)) v 5 50 >>= \ts -> md t3 (future . core ^= inf [ts])
--- >       hSetBuffering stdout NoBuffering
--- >       (m,f) <- dummyMetronome 0.1
--- >       c <- dummyTrack f 2 0 $ replicate 5 $ return $ putStr "."
--- >       v <- var "!"  
--- >       c2 <- dummyTrack f 1 0 . repeat . noIO $ do
--- >                 as <- getActions c
--- >                 vl <- rd v
--- >                 when (null as) . setActions c . replicate 5 . return $ putStr vl
--- >       c3 <- dummyTrack f 14 0 . repeat . noIO . md v $ map succ
--- >       end <- chan ()
--- >       rec {c4 <- dummyTrack f 100 0 . map noIO $ [return (), mapM_ kill [c,c2,c3,c4] >> kill m >> wr end ()]}
--- >       mapM_ run [c,c2,c3,c4]
--- >       rd end
--- >       hSetBuffering stdout LineBuffering 
-
 
