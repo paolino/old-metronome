@@ -106,8 +106,8 @@ data Track a = Track {
 
 $( makeLens ''Track)
 
-emptyTrack :: a -> Ticks -> Priority -> Track a
-emptyTrack i w p = Track i 0 w p (schedule w 0 $ Pause 1) False []
+emptyTrack :: a -> Ticks -> Ticks -> Priority -> Track a
+emptyTrack i ph w p = Track i ph w p (schedule w 0 $ Pause 1) False []
 
 
 schedule :: Ticks ->  Ticks -> L Action -> P Action

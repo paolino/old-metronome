@@ -53,11 +53,8 @@ mkMetronome d = do
         return (m,t)
 
 -- | new standard track, running attached to a metronome
-mkTrack :: STMOrIO m => a -> Ticks -> Priority -> Control (Metronome a) -> m (Control (Track a))
-mkTrack i w p cm = do
-        t <- var $ emptyTrack i w p
-        add cm t
-        return t
+mkTrack :: STMOrIO m => a -> Ticks -> Ticks -> Priority -> m (Control (Track a))
+mkTrack i ph w p = var $ emptyTrack i ph w p
 
 
 
@@ -66,6 +63,11 @@ add :: STMOrIO m =>  Control (Metronome a) -> Control (Track a) -> m ()
 add cm ct = md cm $ tracks ^%= (ct:)
 
 
+subst :: (Eq a, STMOrIO m) =>  Control (Metronome a) -> Control (Track a) -> m ()
+subst cm ct = do
+        Track i ph w p _ m fs <- rd ct
+        ts <- select cm (== i)
+        if null ts then md cm $ tracks ^%= (ct:) else mapM_ (\ct -> md ct $ \t -> Track i ph w p (actions ^$ t) m fs) ts
 -- | delete selected tracks from metronome
 delete :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m ()
 delete cm z = do

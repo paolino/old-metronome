@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveFunctor, DeriveTraversable, DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor, DeriveTraversable, DeriveFoldable, TypeFamilies #-}
 
 module Rythmics where
 
@@ -53,7 +53,7 @@ mkP :: Rational -> L a -> P a
 mkP r (Mappend x y) = 
                 let P r' xs = mkP r x 
                     P r'' ys =  mkP r' y
-                in P r'' $ xs ++ ys
+      in P r'' $ xs ++ ys
 mkP r (Merge x y) = let 
         P rx xs = mkP r x
         P ry ys = mkP r y
@@ -61,7 +61,10 @@ mkP r (Merge x y) = let
 mkP r (Event x) = P (r + fst x) [(r,snd x)]
 mkP r (Pause r') = P (r + r') []
 
-many :: [R Relative a] -> L a
-many [] = Pause 0
-many (x:xs) = Mappend (Event x) (many xs)
+class Index b where
+        readL :: b -> L a -> [L a]
+        modifyL :: b -> (L a -> L a) -> L a -> L a
+        newL :: b -> a -> L a
+
+
 
