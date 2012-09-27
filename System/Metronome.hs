@@ -116,7 +116,7 @@ schedule w c l = mkP (c%1) ((w%1) `mul` normalize l) where
 step :: Ticks -> Track a -> (Track a,[(Priority,Action)])
 step mc (Track s p w z pas@(P t _) g fs) = let
         c = mc + p
-        (P t' as',fs') =  if t <= fromIntegral c then case fs of
+        (P t' as',fs') =  if c `mod` w == 0 then case fs of
                                 [] -> (schedule w c $ Pause 1,[]) 
                                 (as':fs') -> (schedule w c as',fs') 
                                 else (pas,fs)
@@ -156,7 +156,7 @@ execute t  = join . liftM (mapM_ forkIO) .  atomically  . mapM (\f -> runReaderT
 
 -- tick a metronome 
 tick :: (Ticks, MTime) -> Control (Metronome a) -> IO ()
-tick (mc, t) cm = select cm (const True) >>= atomically . update mc >>= execute t . map snd . sortBy (comparing fst) 
+tick (mc, t) cm = select cm (const True) >>= atomically . update mc >>= execute t . map snd . sortBy (comparing fst)
 
 
 -- | Fork a metronome from its initial state
@@ -179,7 +179,6 @@ forkMetronome cm  = forkIO . forever $ do
                 flip (maybe $ return ()) mt $ \t' ->  do
                         -- sleep until next tick
                         sleepThreadUntil (snd t') 
-                        
                         -- execute the tracks at t'
                         tick t' cm
                 
