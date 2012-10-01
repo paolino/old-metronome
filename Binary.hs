@@ -1,6 +1,12 @@
+{-# LANGUAGE TypeFamilies, ConstraintKinds #-}
+
 module Binary where
 
 import Rythmics
+import Control.Monad.State
+import Language
+import System.Random.Shuffle
+import Control.Monad.Random
 
 data Symbol = S | D | J deriving (Show,Read,Eq,Ord)
 
@@ -8,11 +14,17 @@ data Binary = Binary [Symbol] deriving (Show,Read,Eq,Ord)
 
 instance Index Binary where
         -- newL :: Int -> a -> L a
-        newL (Binary ns) = mkL (length ns - 1) ns  where
-                mkL _ [] x = Event (1,x)
-                mkL n (J:ns) x = Mappend (mkL (n - 1) ns x)  (mkL (n - 1) ns x) 
-                mkL n (S:ns) x = Mappend (mkL (n - 1) ns x)  (Pause $ fromIntegral $ 2 ^ n)
-                mkL n (D:ns) x = Mappend  (Pause $ fromIntegral $ 2 ^ n) (mkL (n - 1) ns x)
+        newL (Binary ns) = evalState (mkL (length ns - 1) ns)  where
+                mkL _ [] = do
+                        xs <- get
+                        case xs of
+                                [] -> return $ Pause 1
+                                [x] -> return $ Event (1,x)
+                                x:xs -> put xs >> return (Event (1,x))
+                
+                mkL n (J:ns) = liftM2 Mappend (mkL (n - 1) ns)  (mkL (n - 1) ns) 
+                mkL n (S:ns) = liftM2 Mappend (mkL (n - 1) ns)  (return . Pause $ fromIntegral $ 2 ^ n)
+                mkL n (D:ns) = liftM2 Mappend  (return . Pause $ fromIntegral $ 2 ^ n) (mkL (n - 1) ns)
         readL _ (Merge x y) = error "indexing merge not implemented for Binary"
         readL (Binary []) e@(Event (r,x)) = [e]
         readL (Binary []) _ = [] -- incorrect !
@@ -31,3 +43,13 @@ instance Index Binary where
         modifyL _ f (Event x) = Event x
 
 
+data BinaryChange = Shuffle | Rotate | Select [Int] (Symbol -> Symbol)
+
+type instance RythmChange Binary = BinaryChange
+
+type BCE m = (MonadRandom m, Functor m)
+
+instance ChangeRythm Binary where
+        type Env m = BCE m
+        changeRythm Shuffle (Binary []) = return $ Binary []
+        changeRythm Shuffle (Binary xs) = Binary `fmap` shuffleM xs

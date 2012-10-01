@@ -62,14 +62,14 @@ import Data.Ord (comparing)
 import Data.List (sortBy, mapAccumL, partition)
 import Data.Maybe (catMaybes)
 import Data.Lens.Template (makeLens)
-import Data.Lens.Lazy ((^=),(^$), (^%=))
+import Data.Lens.Lazy ((^=),(^$), (^%=), getL)
 import Control.Concurrent.STMOrIO (STMOrIO, rd, wr, md) 
 import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Category ((.))
 import Data.Ratio
 import Debug.Trace
 import Rythmics
-
+import Data.Monoid
 -- | Time, in seconds
 type MTime = Double
 
@@ -97,32 +97,24 @@ data Track a = Track {
         -- | priority of this track among its peers
         _priority :: Priority,
         -- | the actions left to be run
-        _actions  :: P Action,
-        -- | muted flag, when True, actions are not scheduled, just skipped
         _muted :: Bool,
         -- | next actions
-        _future :: [L Action]
+        _future :: L Action
         }
 
 $( makeLens ''Track)
 
 emptyTrack :: a -> Ticks -> Ticks -> Priority -> Track a
-emptyTrack i ph w p = Track i ph w p (schedule w 0 $ Pause 1) False []
+emptyTrack i ph w p = Track i ph w p False (Pause 0)
 
 
 schedule :: Ticks ->  Ticks -> L Action -> P Action
 schedule w c l = mkP (c%1) ((w%1) `mul` normalize l) where
 
-step :: Ticks -> Track a -> (Track a,[(Priority,Action)])
-step mc (Track s p w z pas@(P t _) g fs) = let
-        c = mc + p
-        (P t' as',fs') =  if c `mod` w == 0 then case fs of
-                                [] -> (schedule w c $ Pause 1,[]) 
-                                (as':fs') -> (schedule w c as',fs') 
-                                else (pas,fs)
-        (ps,as'') = partition ((<= fromIntegral c) . fst) as'
-        tr = Track s p w z (P t' as'') g fs'
-        in (tr,if g then [] else zip (repeat z) (map snd ps))
+step :: Ticks -> Track a -> P (Priority,Action)
+step mc (Track s p w z g fs) = 
+        let     c = mc + p
+        in if c `mod` w > 0 then mempty else (((,) z) `fmap` schedule w c fs)
 
 
 -- | A Thread value cell in STM
@@ -130,33 +122,41 @@ type Control a = TVar a
 
 -- | State of a metronome
 data Metronome a = Metronome {
+        _actions :: P (Priority,Action),
         _ticks :: [(Ticks,MTime)],        -- ^ next ticking times
         _tracks :: [Control (Track a)] -- ^ actions scheduled for the tick to come
         }
 
 $( makeLens ''Metronome)
 
-        
 -- atomically update all thread tracks
-update :: Ticks -> [Control (Track a)] -> STM [(Priority, Action)]
-update mc = fmap concat . mapM f where
-        f tx = do 
-                -- read the track
-                x <- rd tx
-                -- step it 
-                let (x',mpa) = step mc x 
-                -- write the new track
-                wr tx x'
-                -- return actions
-                return mpa
+update :: Ticks -> [Control (Track a)] -> STM (P (Priority, Action))
+update mc = fmap mconcat . mapM (fmap (step mc) . rd)
+
+harddelay = 1
 
 --  execute actions, from STM to IO ignoring retriers
 execute :: MTime -> [Action] -> IO ()
-execute t  = join . liftM (mapM_ forkIO) .  atomically  . mapM (\f -> runReaderT f t `orElse` return (return ()))
+execute t  = join . liftM (mapM_ forkIO) .  atomically  . mapM (\f -> runReaderT f (t + harddelay) `orElse` return (return ()))
 
 -- tick a metronome 
 tick :: (Ticks, MTime) -> Control (Metronome a) -> IO ()
-tick (mc, t) cm = select cm (const True) >>= atomically . update mc >>= execute t . map snd . sortBy (comparing fst)
+tick (mc, t) cm = do
+        ys <- atomically $ do 
+                trs <- getL tracks `fmap` rd cm 
+                as' <- update mc trs
+                as <- getL actions `fmap`  rd cm
+                let     P t xs  = as `mappend` as'
+                        -- discard lost events
+                        xs' = dropWhile ((< mc) . floor . fst) xs
+                        -- separate actual events
+                        (ys,zs) = partition ((== mc) . floor . fst) xs'
+                -- set future actions 
+                md cm $ actions ^= P t zs
+                -- return actual actions
+                return $ map snd ys
+        when (length ys > 0) $ print (mc,length ys)
+        execute t . map snd . sortBy (comparing fst) $ ys
 
 
 -- | Fork a metronome from its initial state

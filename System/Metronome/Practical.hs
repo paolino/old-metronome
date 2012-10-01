@@ -38,7 +38,7 @@ import Control.Concurrent
 import Sound.OpenSoundControl
 import System.Metronome
 import Data.Lens.Lazy
-
+import Rythmics
 -- | no IO as result of the STM action
 noIO :: STM () -> STM (IO ())
 noIO f = f >> return (return ())
@@ -48,7 +48,7 @@ noIO f = f >> return (return ())
 mkMetronome :: MTime -> IO (Control (Metronome a), ThreadId)
 mkMetronome d = do 
         t0 <- utcr 
-        m <- var (Metronome (zip [0..] [t0, t0 + d ..]) []) 
+        m <- var (Metronome (P 0 []) (zip [0..] [t0, t0 + d ..]) []) 
         t <- forkMetronome m 
         return (m,t)
 
@@ -63,11 +63,6 @@ add :: STMOrIO m =>  Control (Metronome a) -> Control (Track a) -> m ()
 add cm ct = md cm $ tracks ^%= (ct:)
 
 
-subst :: (Eq a, STMOrIO m) =>  Control (Metronome a) -> Control (Track a) -> m ()
-subst cm ct = do
-        Track i ph w p _ m fs <- rd ct
-        ts <- select cm (== i)
-        if null ts then md cm $ tracks ^%= (ct:) else mapM_ (\ct -> md ct $ \t -> Track i ph w p (actions ^$ t) m fs) ts
 -- | delete selected tracks from metronome
 delete :: STMOrIO m => Control (Metronome a) -> (a -> Bool) -> m ()
 delete cm z = do

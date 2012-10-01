@@ -8,6 +8,7 @@ import Data.List hiding (foldr)
 import Control.Arrow
 import Data.Traversable
 import Data.Foldable
+import Data.Monoid
 
 data Absolute
 data Relative
@@ -31,12 +32,6 @@ mul r (Event (r',x)) = Event (r'*r,x)
 mul r (Mappend x y) = Mappend (r `mul` x) (r `mul` y)
 mul r (Merge x y) = Merge (r `mul` x) (r `mul` y)
 
-mix :: [R Absolute a] -> [R Absolute a] -> [R Absolute a]
-mix [] x = x
-mix x [] = x
-mix (x@(tx,_):xs) (y@(ty,_):ys) 
-        | tx <= ty = x:mix xs (y:ys)
-        | otherwise = y:mix (x:xs) ys
 
 
 instance Monad L where
@@ -47,24 +42,33 @@ instance Monad L where
         Merge x y >>= f = (x >>= f) `Merge` (y >>= f)
 
 -- | the Rational value is the offset after last event
-data P a = P Rational [R Absolute a] deriving Show
+data P a = P Rational [R Absolute a] deriving (Show, Functor)
+
+instance Monoid (P a) where
+        mempty = P 0 []
+        mappend (P rx xs) (P ry ys) = P (max rx ry) $ mix xs ys
+
+
+mix :: [R Absolute a] -> [R Absolute a] -> [R Absolute a]
+mix [] x = x
+mix x [] = x
+mix (x@(tx,_):xs) (y@(ty,_):ys) 
+        | tx <= ty = x:mix xs (y:ys)
+        | otherwise = y:mix (x:xs) ys
 
 mkP :: Rational -> L a -> P a 
 mkP r (Mappend x y) = 
                 let P r' xs = mkP r x 
                     P r'' ys =  mkP r' y
       in P r'' $ xs ++ ys
-mkP r (Merge x y) = let 
-        P rx xs = mkP r x
-        P ry ys = mkP r y
-        in P (max rx ry) $ mix xs ys
+mkP r (Merge x y) = mkP r x `mappend` mkP r y
 mkP r (Event x) = P (r + fst x) [(r,snd x)]
 mkP r (Pause r') = P (r + r') []
 
 class Index b where
         readL :: b -> L a -> [L a]
         modifyL :: b -> (L a -> L a) -> L a -> L a
-        newL :: b -> a -> L a
+        newL :: b -> [a] -> L a
 
 
 

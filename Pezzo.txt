@@ -1,70 +1,88 @@
 #
-NP "p1" [("attacco",0),("discesa",1),("amp",0.4),("rate",1)]
+NP "p1" [("attacco",0),("discesa",1),("amp",0),("rate",1)]
+NT "kick" 0 256 0 (Binary [J,J,J,J,J]) (PS "kick" "p1")
 #
-NT "kick" 0 8 0 (Binary []) (PS "kick.bpf" "p1")
+NT "mute kick" 0 256 1 (Binary [J,J,J,J,J]) (MC "p1" [IP "amp" 0,IP "attacco" 0])
 #
-NT "mute kick" 0 8 1 (Binary []) (MC "p1" [IP "amp" 0, IP "rate" 1,IP "attacco" 0])
+NT "kick9" 0 384 8 (Binary [J,S,D,S,S]) (MC "p1" [IP "amp" 0.4])
+NT "kick91" 0 768 7 (Binary [J,S,D,J,D,S]) (MC "p1" [IP "amp" 0.2])
+NT "kick10" 0 256 9 (Binary [J,J,S,D,S]) (MC "p1" [IP "amp" 0.06])
+NT "kick11" 0 256 9 (Binary [J,J,S,D,D]) (MC "p1" [IP "amp" 0.05])
+NT "kick8" 0 256 10 (Binary [J,J,S,S,S]) (MC "p1" [IP "amp" 0.6])
 #
-NT "kick9" 0 256 8 (Binary [S,D,J,D,J]) (MC "p1" [IP "amp" 0.2, IP "rate" 1.0])
-NT "kick10" 0 384 8 (Binary [S,D,J,D,J]) (MC "p1" [IP "amp" 0.2, IP "rate" 1.875])
-NT "kick8" 0 384 8 (Binary [D,S,J,J,D]) (MC "p1" [IP "amp" 0.2, IP "rate" 1.5])
+NT "kick82" 0 256 9 (Binary [J,D,S,J,S]) (MC "p1" [IP "rate" 1.02])
+NT "kick84" 0 256 10 (Binary [J,D,D,D,S]) (MC "p1" [IP "rate" 1.24])
+NT "kick86" 0 256 11 (Binary [D,D,J,D,S]) (MC "p1" [IP "rate" 1.34])
 #
-NT "kick82" 0 256 9 (Binary [J,D,S,J,S]) (MC "p1" [IP "amp" 0.6, IP "rate" 1.0])
+#NT "kick8b" 0 8 8 (Binary []) (MC "p1" [MP "bottom" (A 1) , MP "top" (A 0.1)])
 #
-NT "kick8b" 0 8 8 (Binary []) (MC "p1" [MP "bottom" (A 1) , MP "top" (A 1)])
+#NT "kick8c" 0 512 9 (Binary []) (MC "p1" [IP "top" 0.2, IP "bottom" 60])
 #
-NT "kick8c" 0 240 9 (Binary []) (MC "p1" [IP "top" 80, IP "bottom" 20])
-#
-#######################################
-#
-NP "p3" [("attacco",0),("discesa",1),("amp",0),("rate",1)]
-#
-NT "ride" 0 8 0 (Binary []) (PS "ride" "p3")
-#
-NT "mute ride" 0 256 0 (Binary [J,J,J,J,J]) (MC "p3" [IP "amp" 0])
-#
-NT "rideA3" 0 256 10 (Binary [J,S,S,J,S]) (MC "p3" [IP "discesa" 1,IP "amp" 1])
-#
-NT "rideA32" 0 256 3 (Binary [J,J,S,S,S]) (MC "p3" [IP "discesa" 0.7,IP "amp" 0.8])
-#
-NT "rideA" 0 (128) 8 (Binary [J,J,J,S,S]) (MC "p3" [IP "discesa" 0.3,IP "amp" 0.4])
-#
-NT "rideB" 0 192 8 (Binary [D,J,D,S,S]) (MC "p3" [IP "discesa" 0.2,IP "amp" 0.4])
-#
-NT "rideA2" 0 96 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "discesa" 0.25,IP "amp" 0.2])
-#
-#########################################
-#
-NP "p4" [("attacco",0),("discesa",0.6),("amp",0),("rate",1)]
-#
-NT "bassA2" (0) 256 0 (Binary [J,J,J,J,J]) (PS "bass" "p4")
-#
-NT "bassA3" (0) 256 18 (Binary [J,J,J,J,J]) (MC "p4" [IP "attacco" 0.0,IP "discesa" 1.0,IP "amp" 0.0,IP "rate" 1.0])
-#
-NT "bassA4" (0) 256 19 (Binary [S,D,J,S,J]) (MC "p4" [IP "amp" 0.6])
-NT "bassA5" (0) 128 19 (Binary [J,D,D,J,S]) (MC "p4" [IP "amp" 0.35])
-#
-NT "bassR3" (0) 384 20 (Binary [J,D,S,J,J]) (MC "p4" [IP "rate" 1.50])
-NT "bassR4" (32) 192 20 (Binary [J,S,J,J,J]) (MC "p4" [IP "rate" 1.01])
-#
-#NT "bassR4" (0) 128 10 (Binary [J,J,J,J,J])
-#
-#Run "bassR4" (Binary [J,J,J,D,D]) (MC "p4" [IP "rate" 1.00])
-###############################à
-#
-NP "p5" [("attacco",0),("discesa",1),("amp",0),("rate",1),("top",150),("bottom",70)]
-#
-NT "pbassA2" (32) 256 0 (Binary [J,J,J,J,J]) (PS "bass.bpf" "p5")
-#
-NT "pbassA3" (0) 256 18 (Binary [J,J,J,J,J]) (MC "p5" [IP "attacco" 0.0,IP "discesa" 1.0,IP "amp" 0,IP "rate" 1.0])
-#
-NT "pbassA4" (0) 256 19 (Binary [S,S,J,J,J]) (MC "p5" [IP "amp" 0.1])
-NT "pbassA5" (0) 128 19 (Binary [J,D,D,J,S]) (MC "p5" [IP "amp" 0.2])
-#
-NT "pbassR3" (0) 50 20 (Binary [J,J,S,D,J]) (MC "p5" [IP "rate" 1.8])
-NT "pbassR4" 0 24 20 (Binary [J,S,J,J,J]) (MC "p5" [IP "rate" 2.0])
-NT "pbassR5" 0 96 20 (Binary [J,S,D,J,D]) (MC "p5" [IP "rate" 2.36])
-NT "pbassR6" 0 96 20 (Binary [J,S,J,J,S]) (MC "p5" [IP "top" 80])
-NT "pbassR8" 0 192 20 (Binary [J,J,J,J,S]) (MC "p5" [IP "top" 105])
-NT "pbassR7" 0 96 20 (Binary [J,J,J,J,S]) (MC "p5" [IP "discesa" 0.2])
-NT "pbassR9" 0 192 20 (Binary [J,J,J,J,S]) (MC "p5" [IP "discesa" 0.5])
+########################################
+##
+NP "p3" [("attacco",0),("discesa",0),("amp",0),("rate",1)]
+##
+NT "ride" 4 256 0 (Binary [J,J,J,J,J]) (PS "ride.brf" "p3")
+##
+NT "mute ride" 0 256 9 (Binary [J,J,J,J,J]) (MC "p3" [IP "amp" 0.1])
+##
+NT "rideA3" 0 256 10 (Binary [J,S,J,J,J]) (MC "p3" [IP "amp" 0.4])
+##
+NT "rideA32" 0 256 11 (Binary [J,D,D,J,S]) (MC "p3" [IP "amp" 0.6])
+NT "rideA33" 0 512 12 (Binary [S,J,D,J,S]) (MC "p3" [IP "amp" 0.5])
+##
+NT "rideA" 0 (128) 15 (Binary [J,J,D,S,J]) (MC "p3" [IP "amp" 0.1])
+##
+NT "rideB" 0 256 11 (Binary [D,J,D,S,S]) (MC "p3" [IP "discesa" 0.2])
+NT "rideB2" 0 384 12 (Binary [D,J,D,S,S]) (MC "p3" [IP "discesa" 0.25])
+##
+NT "rideZ1" 0 96 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "top" 5000])
+NT "rideZ1" 0 128 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "top" 6000])
+NT "rideZ3" 0 140 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "top" 7000])
+NT "rideT1" 0 96 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "bottom" 0.4])
+NT "rideT2" 0 128 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "bottom" 0.5])
+NT "rideT3" 0 140 12 (Binary [J,S,D,D,S]) (MC "p3" [IP "bottom" 0.6])
+##
+##########################################
+##
+#NP "p4" [("attacco",0),("discesa",0.6),("amp",0),("rate",1)]
+##
+##NT "bassA2" (0) 8 0 (Binary []) (PS "bass" "p4")
+##
+#NT "bassA3" (0) 8 18 (Binary []) (MC "p4" [IP "attacco" 0.05,IP "discesa" 0.8,IP "amp" 0.0])
+##
+#NT "bassA4" (0) 256 19 (Binary [S,D,J,S,J]) (MC "p4" [IP "amp" 0.35])
+#NT "bassA5" (0) 256 19 (Binary [J,D,D,J,S]) (MC "p4" [IP "amp" 0.31])
+##
+##NT "bassR3" (0) 384 20 (Binary [J,D,S,J,J]) (MC "p4" [IP "rate" 1.05])
+#NT "bassR4" (0) 128 20 (Binary [J,J,J,S,S]) (CO [MC "p4" [IP "rate" 1.00], MC "p4" [IP "rate" (6/5)], MC "p4" [IP "rate" (9/5)], MC "p4" [IP "rate" (3/2)], MC "p4" [IP "rate" (3/2)],       MC "p4" [IP "rate" (6/5)], MC "p4" [IP "rate" (3/2)],       MC "p4" [IP "rate" (9/5)]])
+##
+##NT "bassR4" (0) 128 10 (Binary [J,J,J,J,J])
+##
+##Run "bassR4" (Binary [J,J,J,D,D]) (MC "p4" [IP "rate" 1.00])
+################################à
+##
+NP "p5" [("attacco",0.1),("discesa",1),("amp",0),("top",0.9),("bottom",70)]
+##
+NT "pbassA2" (-1) 256 0 (Binary [J,J,J,J,J]) (PS "zill" "p5")
+##
+NT "pbassA3" (0) 256 18 (Binary [J,J,J,J,S]) (MC "p5" [IP "attacco" 0.0,IP "discesa" 0.4,IP "amp" 0])
+###
+NT "pbassA4" (0) 512 19 (Binary [S,J,S,J,J,J]) (MC "p5" [IP "amp" 0.2])
+NT "pbassA4'" (0) 512 19 (Binary [D,J,D,J,J,J]) (MC "p5" [IP "amp" 0.1])
+NT "pbassA41'" (0) 24 23 (Binary []) (MC "p5" [IP "rate" 0.5])
+NT "pbassA41" (0) 38 22 (Binary []) (MC "p5" [IP "rate" 0.75])
+NT "pbassA42" (0) 32 21 (Binary []) (MC "p5" [IP "rate" 1])
+NT "pbassA43" (0) 36 20 (Binary []) (MC "p5" [IP "rate" 1.2])
+NT "pbassA44" (0) 40 19 (Binary []) (MC "p5" [IP "rate" 1.33])
+NT "pbassA45" (0) 44 18 (Binary []) (MC "p5" [IP "rate" 1.5])
+NT "pbassA46" (0) 48 17 (Binary [J]) (MC "p5" [IP "rate" 1.66])
+NT "pbassR7" (0) 96 20 (Binary [J,J,J,J,S]) (MC "p5" [IP "discesa" 0.3])
+NT "pbassR9" (0) 192 20 (Binary [J,J,J,J,S]) (MC "p5" [IP "discesa" 0.35])
+# wow
+NP "p6" [("amp",0.1),("discesa",1),("attacco",0.3),("w",4),("f1",0.5),("f2",0.2),("b",120),("p",1.4),("z",125)]
+NT "wow" 0 128 20 (Binary [S]) (PS  "wow" "p6")
+NT "wow2" 0 512 20 (Binary [S,S]) (MC "p6" [IP "f2" 2,IP "discesa" 1,IP "amp" 0.3, IP "w" 5])
+NT "wow3" 0 512 21 (Binary [D,S]) (MC "p6" [IP "f2" 2.1,IP "discesa" 2,IP "w" 8])
+NT "wow4" 0 512 22 (Binary [S,D]) (MC "p6" [IP "f2" 2.2,IP "discesa" 1, IP "w" 6])
+NT "wow reset" 0 512 22 (Binary [J]) (MC "p6" [IP "p" 1.4])
