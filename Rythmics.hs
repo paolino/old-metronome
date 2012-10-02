@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveFunctor, DeriveTraversable, DeriveFoldable, TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances, GADTs, ExistentialQuantification #-}
 
 module Rythmics where
 
@@ -13,62 +13,32 @@ import Data.Monoid
 data Absolute
 data Relative
 
-type R b a = (Rational, a)
+type Event a = (Integer,a)
+data R b a where 
+        Events :: [Event a] -> R Absolute a
+        Pattern :: Render c => c -> a -> R Relative a
 
-data L a = Event (R Relative a) | Mappend (L a) (L a) | Merge (L a) (L a) | Pause Rational deriving (Functor, Show, Read, Traversable,Foldable)
-
-
-total :: L a -> Rational
-total (Pause r) = r
-total (Event (r,_)) = r
-total (Mappend x y) = total x + total y
-total (Merge x y) = total x + total y
-
-normalize xs = (1/total xs) `mul` xs 
-
-mul :: Rational -> L a -> L a
-mul r (Pause r') = (Pause $ r * r')
-mul r (Event (r',x)) = Event (r'*r,x)
-mul r (Mappend x y) = Mappend (r `mul` x) (r `mul` y)
-mul r (Merge x y) = Merge (r `mul` x) (r `mul` y)
+instance Functor (R Absolute) where
+        f `fmap` (Events xs) = Events $ second f `fmap` xs
+instance Functor (R Relative) where
+        f `fmap` (Pattern c x) = Pattern c (f x)
+        
+class Render c where
+        mkEvents :: c -> a -> R Absolute a
 
 
-
-instance Monad L where
-        return x = Event (1,x)
-        Pause r >>= _ = Pause r
-        Event (t,x) >>= f = t `mul` f x
-        Mappend x y >>= f = (x >>= f) `Mappend` (y >>= f)
-        Merge x y >>= f = (x >>= f) `Merge` (y >>= f)
-
--- | the Rational value is the offset after last event
-data P a = P Rational [R Absolute a] deriving (Show, Functor)
-
-instance Monoid (P a) where
-        mempty = P 0 []
-        mappend (P rx xs) (P ry ys) = P (max rx ry) $ mix xs ys
+instance Monoid (R Absolute a) where
+        mempty = Events []
+        mappend (Events xs) (Events ys) = Events $ mix xs ys
 
 
-mix :: [R Absolute a] -> [R Absolute a] -> [R Absolute a]
+mix :: [Event a] -> [Event a] -> [Event a]
 mix [] x = x
 mix x [] = x
 mix (x@(tx,_):xs) (y@(ty,_):ys) 
         | tx <= ty = x:mix xs (y:ys)
         | otherwise = y:mix (x:xs) ys
 
-mkP :: Rational -> L a -> P a 
-mkP r (Mappend x y) = 
-                let P r' xs = mkP r x 
-                    P r'' ys =  mkP r' y
-      in P r'' $ xs ++ ys
-mkP r (Merge x y) = mkP r x `mappend` mkP r y
-mkP r (Event x) = P (r + fst x) [(r,snd x)]
-mkP r (Pause r') = P (r + r') []
-
-class Index b where
-        readL :: b -> L a -> [L a]
-        modifyL :: b -> (L a -> L a) -> L a -> L a
-        newL :: b -> [a] -> L a
 
 
 

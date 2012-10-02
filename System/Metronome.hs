@@ -114,7 +114,7 @@ schedule w c l = mkP (c%1) ((w%1) `mul` normalize l) where
 step :: Ticks -> Track a -> P (Priority,Action)
 step mc (Track s p w z g fs) = 
         let     c = mc + p
-        in if c `mod` w > 0 then mempty else (((,) z) `fmap` schedule w c fs)
+        in if c `mod` w > 0 || z then mempty else (((,) z) `fmap` schedule w c fs)
 
 
 -- | A Thread value cell in STM
@@ -124,7 +124,7 @@ type Control a = TVar a
 data Metronome a = Metronome {
         _actions :: P (Priority,Action),
         _ticks :: [(Ticks,MTime)],        -- ^ next ticking times
-        _tracks :: [Control (Track a)] -- ^ actions scheduled for the tick to come
+        _tracks :: [(Control (Track a), P Action)] -- ^ actions scheduled for the tick to come
         }
 
 $( makeLens ''Metronome)

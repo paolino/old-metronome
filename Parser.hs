@@ -12,6 +12,12 @@ import Data.Lens.Lazy
 import Data.Ratio
 import OpDouble
 
+import GHC.Exts (Constraint)
+
+class ChangeRythm b where
+        type Env (m :: (* -> *)) :: Constraint
+        change :: Env m => Change b -> b -> m b
+
 
 import Language 
 
@@ -68,6 +74,7 @@ render play cm ps ts lps = do
                                         f (MTPr (M v)) = modify cm (==tn) (priority ^%= (*  realToFrac v))
                                         f Mute = modify cm (==tn) (muted ^= True)
                                         f Unmute = modify cm (==tn) (muted ^= False)
+--                                        f (MTR Shuffle) = 
                         resolve (CO xs) = concatMap resolve xs
                 md t $ future ^= (newL b $ resolve l)
                 return t
