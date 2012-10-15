@@ -1,39 +1,41 @@
-{-# LANGUAGE DoRec, StandaloneDeriving,NoMonomorphismRestriction, UndecidableInstances, DeriveTraversable, DeriveFunctor, DeriveFoldable, FlexibleContexts, TypeFamilies , DatatypeContexts, DataKinds, TypeFamilies, GADTs, KindSignatures, ScopedTypeVariables #-}
+
+{-# LANGUAGE DoRec, StandaloneDeriving,NoMonomorphismRestriction, UndecidableInstances, DeriveTraversable, DeriveFunctor, DeriveFoldable, FlexibleContexts, TypeFamilies ,  DataKinds, TypeFamilies, GADTs, KindSignatures, ScopedTypeVariables #-}
 
 
 import Prelude hiding (lookup)
-import Data.Map (Map, insert, fromList, assocs, update, adjust, lookup, empty, findWithDefault)
-import Data.List (isPrefixOf) 
+import Data.Map (Map, insert, fromList, assocs, update, adjust, lookup, empty, findWithDefault, singleton)
+import Data.Monoid (Monoid (..))
+import Data.Maybe (fromMaybe)
+import Data.List (isPrefixOf, foldr1) 
 import Control.Arrow (first)
 import Control.Monad
 import Control.Monad.Reader 
 import Control.Concurrent.STMOrIO 
 import Control.Concurrent
-import Control.Concurrent.STM (atomically, newTVarIO, modifyTVar)
-import Sound.SC3 hiding (Binary,select)
-import Sound.OpenSoundControl (OSC (..), Time (..) )
+import Control.Concurrent.STM (atomically, newTVarIO, modifyTVar, TVar, STM)
+import Sound.SC3 hiding (Binary,select,Linear)
+import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil )
 import System.Environment
 import System.Console.Haskeline
 
 import Control.Arrow (second)
 import Data.Ratio
-
-import Track
-
+import Algorythm
+import Sequences
 -- udp sending
 
 cs = withSC3 . flip send 
+suona :: Render
+suona syns mt = do
+        let each  ((name,fs), vs)  = s_new name (-1) AddToTail 1 $ collapse sum $ fs ++ vs
+        t0 <- utcr
+        cs . Bundle (UTCr (mt + 5)) . map each $ syns
 
-data Suono = Su String deriving (Read,Show)
-
-suona :: RealTime -> Shared String -> [(Suono, ParamName String)] -> IO ()
-suona (RealTime t) sh xs = let
-        each  (Su name, par)  = s_new name (-1) AddToTail 1 . map (first $ (\(K x) -> x)) .  assocs $ findWithDefault empty par sh  
-        in      do      cs . Bundle (UTCr (t + 0.2)) . map each $ xs
-
+        
+-- p0 = PL "kick" Nothing
 
 perc :: UGen
-perc = control KR "amp" 0.2 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 1))
+perc = control KR "amp" 0.7 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 1))
 
 pb :: UGen -> UGen
 pb n = playBuf 2 AR (fromIntegral n) (control KR "rate" 1) 0 0 NoLoop RemoveSynth * perc
@@ -44,7 +46,7 @@ synths n =
         ,       (".brf" ,brf (pb n) (control KR "bottom" 20) (control KR "top" 200))
         ]
 
-samples = zip ["kick","ride","bass","violin","violin2","zill"] [1..]
+samples = zip ["kick","ride","bass","violin","violin2","zill","rullante"] [1..]
 
 extension = ".wav"
 sampledir = "/home/paolino/Music/"
@@ -65,17 +67,10 @@ bootSynths = do
                         -> cs . d_recv . synthdef (i ++ e) . out 0 $ s
         cs . d_recv . synthdef "wow" . out 0 . (\s -> pan2 s 0 1) $ perc * msin
 
-traks = fromList 
-        [       ("kick", Track (Beat 4) 0 0 128 Infinite (Act (Su "kick") (PN "pk"))) 
-        
-        ]
- 
---        [       TrackEnv "kick" (TrackCtx 0 0 128) False (RTrack (Action $ Suono "kick" "pk") [0,2%8,6%8])
---       ] 
-       
 
-
-main = do
+fac n m = take (m + 1) $ iterate (*n) 1 
+{-
+main' = do
         (f:p:n:_) <- getArgs
         bootSynths
         tstv <- var True
@@ -91,4 +86,4 @@ main = do
                                         [(x,_)] -> lift . atomically . modifyTVar ms . (:) $ x
                                         _ -> outputStrLn "no parse!"
                 in loop
- 
+-}
