@@ -20,45 +20,26 @@ import Sequences
 
 
 type Param = (String,Double)
-data Play = PL String [Param] [Param] | DN | T (Sq Integer Play) deriving (Show,Read)
 
-data Track = Q Integer Integer Play deriving (Read,Show)
-
-(-!) x y = T $ zip x $ repeat y
-infixr 3 -! 
-
-instance Monoid Play where
-        x `mappend` y = T [(0,x),(0,y)]
-        mempty = DN
+data Track a = Q Integer Integer (Sq Integer a) deriving (Read,Show,Functor)
 
 type Action = [((String,[Param]),[Param])]
-
 
 collapseA :: Action -> Action -> Action
 collapseA xs ys = collapse (collapse sum . concat) $ xs ++ ys 
 
 
 
-resolve ::  Integer -> Play -> Sq Integer Action
-resolve i =  map (first (+i)) . collapse (foldr1 collapseA)  . resolve' where 
-        resolve' (PL s fs vs) = [(0,[((s,fs),vs)])]
-        resolve' DN = []
-        resolve' (T xs) = xs >>= \(n,x) -> map (first (+n)) $ resolve' x 
-{-
-amplify w (T xs) = T $ map (amp *** amplify w) xs where
-        amp = floor . (* w) . fromIntegral
-amplify _ x = x
--}
-
+quantize' :: Integer -> Track Action -> Sq Integer Action
 quantize' i (Q w ph x) = let
-        (n,r) = i `divMod` w
-        z = (fromIntegral n + 1) * w + ph
+        (n,r) = (i - ph) `divMod` w
+        z = (fromIntegral n + 1) * w + ph 
         
-        in map (first (+(z - i))) $ resolve i x             
+        in map (first (+z)) $ x             
 
 type Render = Action -> Double -> IO ()
 
-render  :: Render -> Double -> Track -> IO ()
+render  :: Render -> Double -> Track Action -> IO ()
 render r d xs = do
         t0 <- utcr
         let     n = floor $ t0 / d

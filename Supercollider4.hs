@@ -1,4 +1,5 @@
 
+
 {-# LANGUAGE DoRec, StandaloneDeriving,NoMonomorphismRestriction, UndecidableInstances, DeriveTraversable, DeriveFunctor, DeriveFoldable, FlexibleContexts, TypeFamilies ,  DataKinds, TypeFamilies, GADTs, KindSignatures, ScopedTypeVariables #-}
 
 
@@ -14,70 +15,25 @@ import Control.Concurrent.STMOrIO
 import Control.Concurrent
 import Control.Concurrent.STM (atomically, newTVarIO, modifyTVar, TVar, STM, readTChan, readTVar, dupTChan, newBroadcastTChanIO, writeTChan, writeTVar)
 import Sound.SC3 hiding (Binary,select,Linear)
-import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil )
+import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil,sleepThread)
 import System.Environment
 import System.Exit
 import System.Console.Haskeline
-
+import Data.Lens.Lazy
 import Control.Arrow (second)
 import Data.Ratio
-import Algorythm
-import Sequences
 import Control.Monad.Random (evalRandIO)
 import Control.DeepSeq
--- udp sending. fmap (tails . drop n) .  iterateM (fractal y) 
-
-
--- qfi :: Integer -> Int -> Int -> Sq Double Linear -> Sq Double a -> Double -> Integer -> Integer -> IO () 
--- track t k ph d x n m y = (map (map $ quantize k) `fmap` fractalFromTo n m y (zip [0,1/fromIntegral d .. 1] $ repeat x)) >>= mapM_ (render suona  t . Q k ph . T)
--- track' t k ph d x n m y = fractalStat  
-data Lang = Still | Left Int | Right Int | Volume Double | Quit | Phase Double deriving (Show,Read)
-data State = State Lang Double Double 
-type IdLang = (Int,Lang)
-track ch (q,s,ph,w,v,r,y,n) = do
-        l <- newTVarIO (State Still 1 0)
-        let cv = do 
-                State _ v ph <- atomically $ readTVar l
-                return $ (ph,adjust (*v) "amp")
-        wi <- evalRandIO $ fractalSlideStat (foldr collapseA []) w 15 y $ zip [0,1/n..1] $ repeat [((s,[("rate",r)]),[("amp",1/n/8)])] 
-        let k x = do
-                render (suona cv) (v*60/128/2) . Q w ph $ core x
-                f <- atomically $ readTVar l
-                case f of
-                        State Still _ _-> k x
-                        State (Left n) _ _ ->  k $ (iterate left x) !! n
-                        State (Right n) _ _ -> k $ (iterate right x) !! n
-                        State Quit _ _ -> return ()
-        ch' <- atomically $ dupTChan ch
-        let h = do
-                        r <- atomically $ do
-                                (q',lx) <- readTChan ch'
-                                if (q == (q' :: Int)) then do 
-                                        case lx of
-                                                Phase ph -> modifyTVar l (\(State s v _) -> State s v ph) >> return True
-                                                Volume v -> modifyTVar l (\(State s _ ph) -> State s v ph) >> return True
-                                                Quit -> modifyTVar l (\(State _ v ph) -> State Quit v ph) >> return False
-                                                s -> modifyTVar l (\(State _ v ph) -> State s v ph) >> return True
-
-                                else return True
-                                
-                        when r h
-        forkIO (k wi)
-        forkIO h
-        return ()
-                                
                         
-                
-
+import Schedule        
+import Cursor
 cs = withSC3 . flip send 
 
-type PControl = IO (Double, Map String Double -> Map String Double)
 
-suona :: PControl -> Render
-suona cn syns mt = do
-        (ph,ps) <- cn
-        let each  ((name,fs), vs)  = s_new name (-1) AddToTail 1 $ assocs. ps . fromList $ collapse sum $ fs ++ vs
-        cs . Bundle (UTCr (mt + 1.5 + ph)) $ map each syns 
+suona :: Synth
+suona mt s  rs = do
+        let a = s_new s (-1) AddToTail 1 $ rs
+        cs . Bundle (UTCr (mt + 0.3)) $ [a]
 
         
 -- p0 = PL "kick" Nothing
@@ -116,7 +72,7 @@ bootSynths = do
         cs . d_recv . synthdef "wow" . out 0 . (\s -> pan2 s 0 1) $ perc * msin
 
 
-data Control = A IdLang | N (Int,String,Integer,Integer,Double,Double,[(Double,Linear)],Double) deriving (Read)
+{-
 main = do 
         ch <- newBroadcastTChanIO
         runInputT (Settings completeFilename (Just ".supercollider2.history") True) $ forever $ do
@@ -127,6 +83,32 @@ main = do
                         [(N x,_)] -> lift $ void $ track ch x 
                         [(A x,_)] -> lift . atomically $ writeTChan ch x
                         _ -> outputStrLn "no parse!"
+-}
+main = do 
+        r <- var empty :: IO (TVar State)
+        f1 <- ((!! 100) . iterate right) `fmap` mkSF 16 30 [(1,Sh 0.2),(1,Sh 0.4),(1,Re 0.4),(1,Re 0.5)]
+        f3 <- ((!! 100) . iterate right) `fmap` mkSF 16 30 [(1,Sh 0.2),(1,Sh 0.1),(1,Re 0.8),(1,Re 0.5)]
+        f2 <- ((!! 100) . iterate right) `fmap`  mkSF 16 30 [(1,Sh 0.1),(1,Sh 0.2),(1,Re 0.8),(1,Re 0.9)]
+        f4 <- ((!! 100) . iterate right) `fmap`  mkSF 16 30 [(1,Sh 0.1),(1,Sh 0.2),(1,Re 0.8),(1,Re 0.9)]
+        t1 <- var $ Track 0 0.125 (Play "kick" 0 [("ampk","amp")]) f1
+        t3 <- var $ Track 0.125 0.125 (Play "zill" 0 [("ampz","amp"),("ratez","rate")]) f3
+        q1 <- forkTrack suona r t1
+        q3 <- forkTrack suona r t3
+
+        t2 <- var $ Track (-0.01) 0.125 (Parameter 0.6 0.0001 "ampk") f2
+        t4 <- var $ Track (-0.01) 0.125 (Parameter 0.6 0.01 "ampz") f3
+        t5 <- var $ Track (-0.01) 0.125 (Parameter 8.6 0.3 "ratez") f1
+        q2 <- forkTrack suona r t2
+        q4 <- forkTrack suona r t4
+        q5 <- forkTrack suona r t5
+        s1 <- forkIO $ forever $ atomically (modifyTVar t1 $ pattern ^%= right) >> sleepThread 1
+        s2 <- forkIO $ forever $ atomically (modifyTVar t2 $ pattern ^%= right) >> sleepThread 0.5
+        s3 <- forkIO $ forever $ atomically (modifyTVar t3 $ pattern ^%= right) >> sleepThread 0.5
+        s4 <- forkIO $ forever $ atomically (modifyTVar t4 $ pattern ^%= right) >> sleepThread 1.5
+        s5 <- forkIO $ forever $ atomically (modifyTVar t5 $ pattern ^%= right) >> sleepThread 1.5
+        
+
+        getLine
 
 {-
 main' = do
