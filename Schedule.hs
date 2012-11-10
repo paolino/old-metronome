@@ -1,70 +1,54 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, FlexibleContexts, TypeFamilies, MultiParamTypeClasses #-}
 module  Schedule where
 
-import  Cursor (Revol, point, dist, Stat)
 
-import Prelude hiding (lookup)
+import Prelude hiding (lookup,Either (..))
 
-import Data.Map (Map,assocs,(!),lookup,insert,empty,size)
+import Data.List (maximumBy)
+import Data.Ord (comparing)
+import Control.Arrow ((&&&))
 import Control.Concurrent.STM
-import Control.Concurrent
-import Control.Monad (forever)
-import Control.Arrow ((***))
-import Control.Monad.Random (getRandomR)
-import Data.Maybe (catMaybes)
-import Data.Lens.Lazy
-import Data.Lens.Template
+import Control.Concurrent (forkIO, killThread)
+import Control.Monad (forever, join)
+import Sound.OpenSoundControl (sleepThreadUntil,utcr)
 
-import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil )
 
-type Assoc = (String,String)
+class Cursor b m  where
+	variate :: Variator b m -> b m -> b m
+	point :: b m -> (m,Goodness b m)
 
-type Prob = Int
-
-data Control = Play String Prob [Assoc] | Parameter Double Double String
-
-type State = Map String Double
+type family Variator (b :: * -> *) m
+type family Goodness (b :: * -> *) m
 
 type Tempo = Double
 
-type Synth = Tempo -> String -> [(String,Double)] -> IO ()
+type Render m = Tempo -> Tempo -> m -> IO ()
 
-data Track = Track {
-        _shift :: Tempo,
-        _bar :: Tempo,
-        _operation :: Control,
-        _pattern :: Stat Revol Revol
-        }
+data Bar b m =  Bar (Variator b m) (b m) [Render m]
 
-$(makeLens ''Track)
+data Track b m = Track Int [Tempo] (Bar b m) 
 
-
-
-lookupAssoc ms (x,y) = fmap ((,) y ) . lookup x $ ms
+best :: (Cursor b m, Ord (Goodness b m)) => Int -> Variator b m -> b m -> (b m ,(m, Goodness b m))
+best k l x = let
+        ys = take k . tail . iterate (variate l) $ x
+        in (last ys, maximumBy (comparing snd) . map point $ ys)
 
 
-prob :: Prob -> Int -> IO () -> IO ()
-prob l v f = do
-        x <- getRandomR (0,l)
-        if v > x then f else return ()
-
-sync ph d = do
-        t <- utcr
-        let l = floor $ (t - ph) / d
-        return $ fromIntegral (l + 1) * d + ph
-
-forkTrack :: Synth -> TVar State -> TVar Track -> IO ThreadId
-forkTrack sy st tv = 
-        let     f t v (Play s p ts) = do
-                    vs <- atomically $ readTVar st
-                    let rs = catMaybes $ map (lookupAssoc vs) ts
-                    prob p v $ sy t s rs
-                f _ v (Parameter m sc s) = atomically $ modifyTVar st $ Data.Map.insert s (min m $ sc * fromIntegral v)
-        in  forkIO . forever $ do
-                Track dt di ct sr <- atomically $ readTVar tv
-                let m = dist . point $ sr
-                t0 <- sync dt (di * fromIntegral (size m))
-                mapM_ (\(t,v) -> sleepThreadUntil (fromIntegral t * di + t0)  >> f (fromIntegral t * di + t0) v ct) $ assocs m 
-
+track :: (Show (Goodness b m), Ord (Goodness b m), Cursor b m) => TVar (Track b m) -> IO ()
+track tv = track' [] Nothing where
+        track' thrs mpv = join . atomically $ do
+                Track k ts (Bar va x rs) <- readTVar tv
+                case ts of
+                        (t:t':ts) -> do 
+                                let     (y,(p,v)) = best k va x
+                                writeTVar tv (Track k (t':ts) $ Bar va y rs)
+                                return $ do 
+                                        let (p'',v'') = maybe (p,v) (\(p',v') -> if v > v' then (p,v) else (p',v')) mpv
+                                        tn <- utcr
+                                        sleepThreadUntil t 
+                                        mapM_ killThread thrs
+                                        thrs' <- if  t > tn then mapM (\r -> forkIO $ r t t' p) rs else return []
+                                        track' thrs' $ Just (p'',v'')
+                        _ -> return (return ())
 
 

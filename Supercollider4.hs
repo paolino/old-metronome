@@ -2,55 +2,46 @@
 
 {-# LANGUAGE DoRec, StandaloneDeriving,NoMonomorphismRestriction, UndecidableInstances, DeriveTraversable, DeriveFunctor, DeriveFoldable, FlexibleContexts, TypeFamilies ,  DataKinds, TypeFamilies, GADTs, KindSignatures, ScopedTypeVariables #-}
 
+module Supercollider4 where
 
 import Prelude hiding (lookup, Left, Right)
-import Data.Map (Map, insert, fromList, assocs, update, adjust, lookup, empty, findWithDefault, singleton)
-import Data.Monoid (Monoid (..))
-import Data.Maybe (fromMaybe)
-import Data.List (isPrefixOf, foldr1) 
-import Control.Arrow (first)
 import Control.Monad
-import Control.Monad.Reader 
-import Control.Concurrent.STMOrIO 
-import Control.Concurrent
-import Control.Concurrent.STM (atomically, newTVarIO, modifyTVar, TVar, STM, readTChan, readTVar, dupTChan, newBroadcastTChanIO, writeTChan, writeTVar)
 import Sound.SC3 hiding (Binary,select,Linear)
+import Sound.SC3.UGen.Noise.ID 
 import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil,sleepThread)
-import System.Environment
-import System.Exit
-import System.Console.Haskeline
-import Data.Lens.Lazy
-import Control.Arrow (second)
-import Data.Ratio
-import Control.Monad.Random (evalRandIO)
-import Control.DeepSeq
+import Data.Map (assocs)
                         
-import Schedule        
-import Cursor
+import Actions
+
 cs = withSC3 . flip send 
 
-
-suona :: Synth
-suona mt s  rs = do
-        let a = s_new s (-1) AddToTail 1 $ rs
-        cs . Bundle (UTCr (mt + 0.3)) $ [a]
-
+scNoteOn :: NoteOn
+scNoteOn mt s  rs = do
+        let     a = s_new s (-1) AddToTail 1 $ assocs rs
+        t0 <- last (show a) `seq` utcr
+        if t0 < (mt + 2)  then  cs . Bundle (UTCr (mt + 2)) $ [a]
+                else print "late!"
         
 -- p0 = PL "kick" Nothing
 
-perc :: UGen
-perc = control KR "amp" 0.7 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 1))
+perc :: UGen -> UGen
+perc k = control KR "amp" 0.8 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 3 * 2/ k))
 
+keyb :: UGen
+keyb = control KR "amp" 0.5 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid 0 (control KR "attacco" 0 / 3) (control KR "discesa" 3 ) 1)
+
+tick = envGen AR 1 1 0 1 DoNothing (envPerc 0 0.2)
 pb :: UGen -> UGen
-pb n = playBuf 2 AR (fromIntegral n) (control KR "rate" 1) 0 0 NoLoop RemoveSynth * perc
+pb n = playBuf 2 AR (fromIntegral n) (control KR "rate" 1) 0 0 NoLoop RemoveSynth * perc 1
 
 synths n = 
-        [       (""     ,pb n)
-        ,       (".bpf" ,bpf (pb n) (control KR "bottom" 20) (control KR "top" 200))
-        ,       (".brf" ,brf (pb n) (control KR "bottom" 20) (control KR "top" 200))
+        [            
+                (""     ,(pb n))
+        --        ,       (".bpf" ,bpf (pb n) (control KR "bottom" 20) (control KR "top" 200))
+--        ,       (".brf" ,brf (pb n) (control KR "bottom" 20) (control KR "top" 200))
         ]
 
-samples = zip ["kick","ride","bass","violin","violin2","zill","rullante"] [1..]
+samples = zip ["kick","ride","zill","rullante", "violin","bass"] [1..]
 
 extension = ".wav"
 sampledir = "/home/paolino/Music/"
@@ -61,70 +52,38 @@ msin = sinOsc AR (control KR "b" 80 +
                 )
         ) (control KR "p" 90)
 
+percz = control KR "amp" 0.01 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0.2) (control KR "discesa" 1/2))
+
+snare q k l =  out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ q * z 1 * z k where
+        z f = perc 1 * lpf (ringz  (sinOsc AR 0.1 0.04) (0.5 * l * f * freq) 30) (l * f * freq)
+        freq = midiCPS $ control KR "freq" 45 +  control KR "rate" 0
+
+zill = out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $  percz * 0.00 * ringz (pinkNoise 'a' AR) (freq * 6)  2
+        where   freq = midiCPS $ control KR "freq" 45  
+
+freq = 110
+sino  = out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $  perc 2  * (0.6 + (0.05 * sinOsc KR 5 0)) * ( sinOsc AR (3 * freq) 0 * sinOsc AR (freq * 2) 0) * 
+        ( 0.7 * sinOsc AR freq 0 
+        + 0.02 * sinOsc AR (freqn 5 ) 0 
+        + 0.02 * sinOsc AR (freqn 7 ) 0
+        + 0.02 * sinOsc AR (freqn 10) 0
+        )
+        where   freq = midiCPS $ control KR "freq" 45 +  control KR "rate" 0
+                freqn n = midiCPS $ control KR "freq" 45 +  control KR "rate" 0 + n
+
+
 bootSynths = do 
-        cs $ g_new [(1, AddToTail, 0)] 
+        cs $ p_new [(1, AddToTail, 0)] 
+        cs . d_recv . synthdef "sino" $ sino 
+        cs . d_recv . synthdef "zill" $ zill
+        cs . d_recv . synthdef "rullante" $ snare 0.15 1.333 1.27
+        cs . d_recv . synthdef "kick" $ snare 0.16 1.01 0.66
+--        cs . d_recv . synthdef "wow" . out ((n - 1) *2) . (\s -> pan2 s 0 1) $ perc * msin
+
+bootSamples = do
         -- load samples
         forM_ samples $ \(i,n) -> cs $ b_allocRead n (sampledir ++ i ++ extension) 0 0
         -- create synths
         forM_ samples $  \(i,n) 
-                -> forM_ (synths n) $ \(e,s) 
+                -> forM_ (zip [0..] $ synths n) $ \(j,(e,s))  
                         -> cs . d_recv . synthdef (i ++ e) . out 0 $ s
-        cs . d_recv . synthdef "wow" . out 0 . (\s -> pan2 s 0 1) $ perc * msin
-
-
-{-
-main = do 
-        ch <- newBroadcastTChanIO
-        runInputT (Settings completeFilename (Just ".supercollider2.history") True) $ forever $ do
-        mcom <- getInputLine "> "
-        case mcom of 
-                Nothing -> lift $ exitSuccess 
-                Just e -> case reads e of 
-                        [(N x,_)] -> lift $ void $ track ch x 
-                        [(A x,_)] -> lift . atomically $ writeTChan ch x
-                        _ -> outputStrLn "no parse!"
--}
-main = do 
-        r <- var empty :: IO (TVar State)
-        f1 <- ((!! 100) . iterate right) `fmap` mkSF 16 30 [(1,Sh 0.2),(1,Sh 0.4),(1,Re 0.4),(1,Re 0.5)]
-        f3 <- ((!! 100) . iterate right) `fmap` mkSF 16 30 [(1,Sh 0.2),(1,Sh 0.1),(1,Re 0.8),(1,Re 0.5)]
-        f2 <- ((!! 100) . iterate right) `fmap`  mkSF 16 30 [(1,Sh 0.1),(1,Sh 0.2),(1,Re 0.8),(1,Re 0.9)]
-        f4 <- ((!! 100) . iterate right) `fmap`  mkSF 16 30 [(1,Sh 0.1),(1,Sh 0.2),(1,Re 0.8),(1,Re 0.9)]
-        t1 <- var $ Track 0 0.125 (Play "kick" 0 [("ampk","amp")]) f1
-        t3 <- var $ Track 0.125 0.125 (Play "zill" 0 [("ampz","amp"),("ratez","rate")]) f3
-        q1 <- forkTrack suona r t1
-        q3 <- forkTrack suona r t3
-
-        t2 <- var $ Track (-0.01) 0.125 (Parameter 0.6 0.0001 "ampk") f2
-        t4 <- var $ Track (-0.01) 0.125 (Parameter 0.6 0.01 "ampz") f3
-        t5 <- var $ Track (-0.01) 0.125 (Parameter 8.6 0.3 "ratez") f1
-        q2 <- forkTrack suona r t2
-        q4 <- forkTrack suona r t4
-        q5 <- forkTrack suona r t5
-        s1 <- forkIO $ forever $ atomically (modifyTVar t1 $ pattern ^%= right) >> sleepThread 1
-        s2 <- forkIO $ forever $ atomically (modifyTVar t2 $ pattern ^%= right) >> sleepThread 0.5
-        s3 <- forkIO $ forever $ atomically (modifyTVar t3 $ pattern ^%= right) >> sleepThread 0.5
-        s4 <- forkIO $ forever $ atomically (modifyTVar t4 $ pattern ^%= right) >> sleepThread 1.5
-        s5 <- forkIO $ forever $ atomically (modifyTVar t5 $ pattern ^%= right) >> sleepThread 1.5
-        
-
-        getLine
-
-{-
-main' = do
-        (f:p:n:_) <- getArgs
-        bootSynths
-        tstv <- var True
-        m <- mkMetronome (RealTime $ 60/read n/read p) 
-        ms <- newTVarIO []
-        sc <- forkIO $ run suona ms m 
-        runInputT (Settings completeFilename (Just ".supercollider2.history") True) $ 
-                let loop = do 
-                        mcom <- getInputLine "command> " 
-                        case mcom of 
-                                Nothing -> lift $ killThread sc 
-                                Just com -> const loop =<< case reads com of 
-                                        [(x,_)] -> lift . atomically . modifyTVar ms . (:) $ x
-                                        _ -> outputStrLn "no parse!"
-                in loop
--}
