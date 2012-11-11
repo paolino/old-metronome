@@ -21,15 +21,17 @@ dist n = elems . flip union (fromList $ zip [0..n-1] $ repeat 0) . fromListWith 
 newDist :: Int -> Int -> StdGen -> [Int]
 newDist ps bu g = dist bu . flip evalRand g $ replicateM ps $ getRandomR (0,1)
 
-data Window a = Window Int Int Integer (Window a) a
+data Window a = Window Int Int [Int] ([Window a] -> Integer) (Window a) a
 
 type instance Variator Window [Double] = ()
 type instance Goodness Window [Double] = Integer
 
 instance Cursor Window [Double]  where
-        variate () (Window _ _ _ nxt _) = nxt
-        point (Window _ _ v _ r) = (r, v)
+        variate () (Window _ _ _ _ nxt _) = nxt
+        point (Window _ _ _ v _ r) = (r, v)
 
+
+toL (Window op bu q _ _ _) =  L bu . map fromIntegral $ q
 
 normalize :: [Int] -> [Double] 
 normalize xs = let 
@@ -42,7 +44,8 @@ mkRevol :: Int -> Int -> Int -> Int -> StdGen -> Window [Double]
 mkRevol se op bu ps f = let
         newW (l:ls) q (r:rs) = let 
                 q' = zipWith3 (\lx qx rx -> qx - lx + rx) l q r
-                in Window op bu (val . L bu . map fromIntegral $ q') (newW ls q' rs) (normalize q')
+                w = Window op bu q' (\ds -> val (map toL ds) $ toL w) (newW ls q' rs) (normalize q')
+                in w
         gs = unfoldr (Just . split) (mkStdGen se)
         ls = map (newDist ps bu) gs
         rs = drop op ls

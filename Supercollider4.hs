@@ -19,7 +19,7 @@ scNoteOn :: NoteOn
 scNoteOn mt s  rs = do
         let     a = s_new s (-1) AddToTail 1 $ assocs rs
         t0 <- last (show a) `seq` utcr
-        if t0 < (mt + 2)  then  cs . Bundle (UTCr (mt + 2)) $ [a]
+        if t0 < (mt + 15)  then  cs . Bundle (UTCr (mt + 15)) $ [a]
                 else print "late!"
         
 -- p0 = PL "kick" Nothing
