@@ -19,7 +19,7 @@ scNoteOn :: NoteOn
 scNoteOn mt s  rs = do
         let     a = s_new s (-1) AddToTail 1 $ assocs rs
         t0 <- last (show a) `seq` utcr
-        if t0 < (mt + 15)  then  cs . Bundle (UTCr (mt + 15)) $ [a]
+        if t0 < (mt + 1)  then  cs . Bundle (UTCr (mt + 1)) $ [a]
                 else print "late!"
         
 -- p0 = PL "kick" Nothing
@@ -32,7 +32,7 @@ keyb = control KR "amp" 0.5 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid 0 (con
 
 tick = envGen AR 1 1 0 1 DoNothing (envPerc 0 0.2)
 pb :: UGen -> UGen
-pb n = playBuf 2 AR (fromIntegral n) (control KR "rate" 1) 0 0 NoLoop RemoveSynth * perc 1
+pb n = playBuf 2 AR (fromIntegral n) (1 + control KR "rate" 1/36) 0 0 NoLoop RemoveSynth * perc 1
 
 synths n = 
         [            
@@ -54,33 +54,33 @@ msin = sinOsc AR (control KR "b" 80 +
 
 percz = control KR "amp" 0.01 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0.2) (control KR "discesa" 1/2))
 
-snare q k l =  out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ q * z 1 * z k where
-        z f = perc 1 * lpf (ringz  (sinOsc AR 0.1 0.04) (0.5 * l * f * freq) 30) (l * f * freq)
+snare q k l =  out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ q * sum ([n * z k | (n,k) <- [(0.8,1),(0.2,2),(0.2,2.01)]])where
+        z f = perc 1 * lpf (0.1 * ringz  (sinOsc AR 1 0.4) (l * f * freq) 30) (2*l * f * freq)
         freq = midiCPS $ control KR "freq" 45 +  control KR "rate" 0
 
 zill = out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $  percz * 0.00 * ringz (pinkNoise 'a' AR) (freq * 6)  2
         where   freq = midiCPS $ control KR "freq" 45  
-
-freq = 110
-sino  = out 0 . (\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $  perc 2  * (0.6 + (0.05 * sinOsc KR 5 0)) * ( sinOsc AR (3 * freq) 0 * sinOsc AR (freq * 2) 0) * 
-        ( 0.7 * sinOsc AR freq 0 
-        + 0.02 * sinOsc AR (freqn 5 ) 0 
+sino = out 0  .(\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ perc 2 * (0.6 + (0.05 * sinOsc KR 5 0)) * ( sinOsc AR (3 * freq) 0 * sinOsc AR (freq * 2) 0) *
+        ( 0.7 * sinOsc AR freq 0
+        + 0.02 * sinOsc AR (freqn 5 ) 0
         + 0.02 * sinOsc AR (freqn 7 ) 0
         + 0.02 * sinOsc AR (freqn 10) 0
         )
-        where   freq = midiCPS $ control KR "freq" 45 +  control KR "rate" 0
-                freqn n = midiCPS $ control KR "freq" 45 +  control KR "rate" 0 + n
+        where   freq = midiCPS $ control KR "freq" 45 + control KR "rate" 0
+                freqn n = midiCPS $ control KR "freq" 45 + control KR "rate" 0 + n
+freq = 110
 
 
 bootSynths = do 
         cs $ p_new [(1, AddToTail, 0)] 
         cs . d_recv . synthdef "sino" $ sino 
         cs . d_recv . synthdef "zill" $ zill
-        cs . d_recv . synthdef "rullante" $ snare 0.15 1.333 1.27
-        cs . d_recv . synthdef "kick" $ snare 0.16 1.01 0.66
+        cs . d_recv . synthdef "rullante" $ snare 0.1 1 2
+        cs . d_recv . synthdef "kick" $ snare 0.1 0.5 1
 --        cs . d_recv . synthdef "wow" . out ((n - 1) *2) . (\s -> pan2 s 0 1) $ perc * msin
 
 bootSamples = do
+        cs $ p_new [(1, AddToTail, 0)] 
         -- load samples
         forM_ samples $ \(i,n) -> cs $ b_allocRead n (sampledir ++ i ++ extension) 0 0
         -- create synths

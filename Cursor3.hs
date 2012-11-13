@@ -9,45 +9,38 @@ import System.Random
 import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Random hiding (fromList)
-import Corr
-import Schedule
 
-type Revol = [Double] 
+type Dist = [Int]
+type Buckets = Int 
 
-dist :: Int -> Revol -> [Int]
+data Window  = Window {
+        buckets :: Buckets,
+        value :: Dist,
+        next :: Window
+        } 
+
+dist :: Int -> [Double] -> Dist
 dist n = elems . flip union (fromList $ zip [0..n-1] $ repeat 0) . fromListWith (+) . map (floor . (/k) &&& const 1) where
         k = 1/fromIntegral n
 
-newDist :: Int -> Int -> StdGen -> [Int]
-newDist ps bu g = dist bu . flip evalRand g $ replicateM ps $ getRandomR (0,1)
-
-data Window a = Window Int Int [Int] ([Window a] -> Integer) (Window a) a
-
-type instance Variator Window [Double] = ()
-type instance Goodness Window [Double] = Integer
-
-instance Cursor Window [Double]  where
-        variate () (Window _ _ _ _ nxt _) = nxt
-        point (Window _ _ _ v _ r) = (r, v)
+mkDist :: Int -> Int -> StdGen -> Dist
+mkDist ps bu g = dist bu . flip evalRand g $ replicateM ps $ getRandomR (0,1)
 
 
-toL (Window op bu q _ _ _) =  L bu . map fromIntegral $ q
-
-normalize :: [Int] -> [Double] 
+normalize :: Dist -> [Double] 
 normalize xs = let 
         ys = map fromIntegral xs
         mx = maximum ys
         mmx = minimum ys
         in map (\y -> (y - mmx)/(mx - mmx)) ys
 
-mkRevol :: Int -> Int -> Int -> Int -> StdGen -> Window [Double]
-mkRevol se op bu ps f = let
+mkWindow :: Int -> Int -> Int -> Int -> Window 
+mkWindow s op bu ps = let
         newW (l:ls) q (r:rs) = let 
                 q' = zipWith3 (\lx qx rx -> qx - lx + rx) l q r
-                w = Window op bu q' (\ds -> val (map toL ds) $ toL w) (newW ls q' rs) (normalize q')
-                in w
-        gs = unfoldr (Just . split) (mkStdGen se)
-        ls = map (newDist ps bu) gs
+                in Window bu q' (newW ls q' rs)
+        gs = unfoldr (Just . split) (mkStdGen s)
+        ls = map (mkDist ps bu) gs
         rs = drop op ls
         q = foldr (zipWith (+)) (repeat 0) $ take op ls
         in newW ls q rs

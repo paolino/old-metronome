@@ -2,87 +2,60 @@ module Actions where
 
 import Prelude hiding (lookup, filter)
 import Data.List (mapAccumL)
-import Control.Monad (when, forM_)
+import Control.Monad (when, forM_, join, (>=>))
 import Control.Concurrent ()
 import Control.Concurrent.STM (atomically, newTVar, modifyTVar, TVar, STM, readTChan, readTVar, dupTChan, newBroadcastTChanIO, writeTChan, writeTVar)
-import Sound.SC3 hiding (Binary,select,Linear)
-import Sound.OpenSoundControl (OSC (..), Time (..),sleepThreadUntil)
+import Sound.OpenSoundControl (sleepThreadUntil)
 import Control.Monad.Random (getRandomR, Random, evalRand, mkStdGen)
 import Data.Map.Strict (assocs, empty,lookup, Map, singleton, insert,filter, keys, member , (!), fromList)
+import System.Random (StdGen)
                         
-import Schedule
-import Cursor3 hiding (insert)
 
 
-
+type Tempo = Double
 
 type Params = Map String Double 
         
+data Action
+        = Play 
+                Tempo -- ritardo
+                String -- synth name
+                [(String,String)] -- parameter resolution
+                Double -- top probability border
+        |  TParam 
+                String -- parameter name
+                Double -- max value
+                Double -- min value
+        | SParam 
+                String -- parameter name
+                [Double] -- choices for parameter values
+                 deriving (Show,Read)
 
-writeParams m parname val = atomically $ modifyTVar m $ insert parname val
-                        
+type NoteOn =  Tempo -> String -> Params -> IO ()
+type Act = Int -> Double -> [Double] -> Tempo -> STM (IO ())
 
-data Play = Play 
-        Int -- seed
-        Int -- steps
-        Double -- ritardo
-        String -- synth name
-        [(String,String)] -- parameter resolution
-        Double -- top probability border
+actCollect :: [STM (IO ())] -> IO ()
+actCollect = join . fmap sequence_ . atomically . sequence
 
-
-type NoteOn =  Double -> String -> Params -> IO ()
-type Parameters = TVar (Map String (TVar Params))
-        
-
-renderPlay :: TVar Params -> NoteOn -> Play -> Render Revol
-renderPlay m noteon (Play see l rit name res level) start end (stat) = do
-                let     ts = [start , start + (end - start)/fromIntegral l .. ] 
-                forM_ (zip3 [0..] stat ts) $ \(n,v,t) -> do 
-                        sleepThreadUntil t 
-                        l <- getRandomR (0,level)
-                        when (v >= l) $ do 
-                                vs <- atomically (readTVar  m) 
+render :: NoteOn -> TVar Params -> Action -> Int -> Act
+render noteon m (Play rit name res level) se n v _ t = do 
+                        let l =  evalRand (getRandomR (0,level)) $ mkStdGen (se + n)
+                        vs <- readTVar  m
+                        return $ when (v >= l) $ do 
                                 noteon (t + rit) name (fmap (vs !) $ filter (`member` vs) . fromList $ res) 
+render _ m (TParam paramname top bottom) _ _ v _ _ = do
+        modifyTVar m $ insert paramname (bottom + v * (top - bottom))
+        return (return ())
+render _ m (SParam paramname choices) se n v vs _ = do
+                let v = evalRand ((cycle choices !!) `fmap` pickFrom (zip [0..] vs)) $ mkStdGen (se + n)
+                modifyTVar m $ insert paramname v
+                return (return ())
 
-                
-data TParam = TParam 
-        Int -- steps
-        String -- parameter name
-        Double -- max value
-        Double -- min value
-
-renderTParam :: TVar Params -> TParam -> Render Revol
-renderTParam m (TParam l paramname top bottom) start end (stat) = do
-                let     ts = [start , start + (end - start)/fromIntegral l .. ] 
-                forM_ (zip3 [0..] stat ts) $ \(n,v,t) -> do 
-                        sleepThreadUntil t 
-                        writeParams m paramname (bottom + v * (top - bottom))
-
-data SParam = SParam 
-        Int -- seed
-        Int -- validity steps
-        String -- parameter name
-        (Map Int Double) -- choices for parameter values
-
-
-pickFrom :: [(a, Double)] -> IO a
 pickFrom xs = do
         let     l = sum $ map snd xs
                 f s (x,y) = (s + y,(x , s + y))
         t <- getRandomR (0,l)
         return $ fst . head $ dropWhile ((<t) . snd) . snd . mapAccumL f 0 $ xs
-         
-renderSParam :: TVar Params -> SParam -> Render Revol
-renderSParam m (SParam see l paramname choices) start end (stat) = do
-        let     ts = take l $ zip [0..] $ [start , start + (end - start)/fromIntegral l .. ] 
-        forM_ ts $ \(i,t) -> do 
-                sleepThreadUntil t 
-                rs <-  flip lookup choices `fmap` pickFrom (zip [0..] stat) 
-                case rs of
-                        Nothing -> return ()
-                        Just v -> writeParams m paramname  v
-
 
 
 
