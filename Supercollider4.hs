@@ -19,7 +19,7 @@ scNoteOn :: NoteOn
 scNoteOn mt s  rs = do
         let     a = s_new s (-1) AddToTail 1 $ assocs rs
         t0 <- last (show a) `seq` utcr
-        if t0 < (mt + 1)  then  cs . Bundle (UTCr (mt + 1)) $ [a]
+        if t0 < (mt + 3)  then  cs . Bundle (UTCr (mt + 3)) $ [a]
                 else print "late!"
         
 -- p0 = PL "kick" Nothing
@@ -32,7 +32,7 @@ keyb = control KR "amp" 0.5 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid 0 (con
 
 tick = envGen AR 1 1 0 1 DoNothing (envPerc 0 0.2)
 pb :: UGen -> UGen
-pb n = playBuf 2 AR (fromIntegral n) (1 + control KR "rate" 1/36) 0 0 NoLoop RemoveSynth * perc 1
+pb n = playBuf 2 AR (fromIntegral n) (1.2 + control KR "rate" 1/100) 0 0 NoLoop RemoveSynth * perc 1
 
 synths n = 
         [            
