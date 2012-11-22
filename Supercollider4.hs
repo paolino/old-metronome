@@ -1,38 +1,59 @@
-
-
 {-# LANGUAGE DoRec, StandaloneDeriving,NoMonomorphismRestriction, UndecidableInstances, DeriveTraversable, DeriveFunctor, DeriveFoldable, FlexibleContexts, TypeFamilies ,  DataKinds, TypeFamilies, GADTs, KindSignatures, ScopedTypeVariables #-}
 
 module Supercollider4 where
 
-import Prelude hiding (lookup, Left, Right)
+import Prelude 
 import Control.Monad
 import Sound.SC3 hiding (Binary,select,Linear)
 import Sound.SC3.UGen.Noise.ID 
+import Sound.SC3.UGen.FFT 
 import Sound.OpenSoundControl (OSC (..), Time (..),utcr, sleepThreadUntil,sleepThread)
 import Data.Map (assocs)
+import Data.List (find)
                         
 import Actions
+
+
+freq :: UGen
+freq  = midiCPS $ control KR "rate" 0
 
 cs = withSC3 . flip send 
 
 scNoteOn :: NoteOn
-scNoteOn mt s  rs = do
+scNoteOn mt (Left s)  rs = do
         let     a = s_new s (-1) AddToTail 1 $ assocs rs
         t0 <- last (show a) `seq` utcr
-        if t0 < (mt + 3)  then  cs . Bundle (UTCr (mt + 3)) $ [a]
+        if t0 < (mt)  then  cs . Bundle (UTCr (mt)) $ [a]
+                else print "late!"
+scNoteOn mt (Right s)  rs = do
+        let     a = n_set s $ assocs rs
+        t0 <- last (show a) `seq` utcr
+        if t0 < (mt)  then  cs . Bundle (UTCr (mt)) $ [a]
                 else print "late!"
         
+baz = out 0 . (\s -> pan2 s 0 1) $ control KR "amp" 0.2 * ( 
+                mix $ hpf (lpf (0.5 * (lfSaw AR (fs 1) 0)) (freq * 2)) (freq * 0.8))
+                        
+                        where
+        fs l = mce [freq,freq * 1.007]
+
+bazzo = out 0 . (\s -> pan2 s 0 1) $ perc 1 * ( 
+                mix $ hpf (lpf (0.2 * (0.6*lfSaw AR (fs 1) 0)) (freq * 4)) (freq * 0.6))
+                        
+                        where
+        fs l = mce [freq,freq * 1.007,freq * 1.003]
+
 -- p0 = PL "kick" Nothing
 
 perc :: UGen -> UGen
-perc k = control KR "amp" 0.8 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 3 * 2/ k))
+perc k = control KR "amp" 0.8 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 1 * 2/ k))
 
 keyb :: UGen
 keyb = control KR "amp" 0.5 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid 0 (control KR "attacco" 0 / 3) (control KR "discesa" 3 ) 1)
 
 tick = envGen AR 1 1 0 1 DoNothing (envPerc 0 0.2)
 pb :: UGen -> UGen
-pb n = playBuf 2 AR (fromIntegral n) (1.2 + control KR "rate" 1/100) 0 0 NoLoop RemoveSynth * perc 1
+pb n = playBuf 2 AR (fromIntegral n) ((1 + control KR "shift" 0) * (control KR "rate" 0 + 1)/midiCPS 0) 0 0 NoLoop RemoveSynth * perc 1
 
 synths n = 
         [            
@@ -41,7 +62,7 @@ synths n =
 --        ,       (".brf" ,brf (pb n) (control KR "bottom" 20) (control KR "top" 200))
         ]
 
-samples = zip ["kick","ride","zill","rullante", "violin","bass"] [1..]
+samples = zip ["kick","ride","zill","rullante"] [1..]
 
 extension = ".wav"
 sampledir = "/home/paolino/Music/"
@@ -68,15 +89,19 @@ sino = out 0  .(\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ perc 2 * (0.6 + (0.05 *
         )
         where   freq = midiCPS $ control KR "freq" 45 + control KR "rate" 0
                 freqn n = midiCPS $ control KR "freq" 45 + control KR "rate" 0 + n
-freq = 110
 
 
 bootSynths = do 
-        cs $ p_new [(1, AddToTail, 0)] 
-        cs . d_recv . synthdef "sino" $ sino 
-        cs . d_recv . synthdef "zill" $ zill
-        cs . d_recv . synthdef "rullante" $ snare 0.1 1 2
-        cs . d_recv . synthdef "kick" $ snare 0.1 0.5 1
+        cs . d_recv . synthdef "baz" $ baz 
+        cs . d_recv . synthdef "bazzo" $ bazzo
+        sleepThread 1
+        cs $ n_free [3]
+        cs $ s_new "baz" 3 AddToTail 1 []
+--        cs $ s_new "baz" 4 AddToTail 1 []
+--        cs $ s_new "baz" 5 AddToTail 1 []
+        
+        -- cs $ s_new "sin" 2 AddToTail 1 $ []
+         
 --        cs . d_recv . synthdef "wow" . out ((n - 1) *2) . (\s -> pan2 s 0 1) $ perc * msin
 
 bootSamples = do
@@ -87,3 +112,10 @@ bootSamples = do
         forM_ samples $  \(i,n) 
                 -> forM_ (zip [0..] $ synths n) $ \(j,(e,s))  
                         -> cs . d_recv . synthdef (i ++ e) . out 0 $ s
+
+boot = do
+        cs $ p_new [(1, AddToTail, 0)] 
+        sleepThread 1
+        bootSynths
+        bootSamples
+
