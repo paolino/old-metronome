@@ -16,6 +16,7 @@ k = 1
 
 summa x y = sum .  map snd . filter ((`elem` reg (no x) (no y)) . fst) . zip [0..] .val0 x $ y
 
+val :: [Window] -> Window -> Integer
 val zs w = (k * fromIntegral (length zs) * summa x x) + sum (map (summa x . toL) zs) where x = toL w
 selfval w =  summa x x where x = toL w
 toL :: Window -> L Integer

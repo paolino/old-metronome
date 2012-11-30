@@ -19,6 +19,7 @@ freq  = midiCPS $ control KR "rate" 0
 
 cs = withSC3 . flip send 
 
+
 scNoteOn :: NoteOn
 scNoteOn mt (Left s)  rs = do
         let     a = s_new s (-1) AddToTail 1 $ assocs rs
@@ -37,16 +38,17 @@ baz = out 0 . (\s -> pan2 s 0 1) $ control KR "amp" 0.2 * (
                         where
         fs l = mce [freq,freq * 1.007]
 
-bazzo = out 0 . (\s -> pan2 s 0 1) $ perc 1 * ( 
-                mix $ hpf (lpf (0.2 * (0.6*lfSaw AR (fs 1) 0)) (freq * 4)) (freq * 0.6))
+bazzo = out 0 . (\s -> pan2 s 0 1) $ percA 1 * ( 
+                mix $ hpf (lpf (0.2 * sum (map (\(p,f) -> p*lfSaw AR f 0) (fs 1))) (freq * control KR "gnao" 0.8 * 10)) (freq * 0.8))
                         
                         where
-        fs l = mce [freq,freq * 1.007,freq * 1.003]
+        fs l = [(0.8,freq),(control KR "3d" 0.7,freq * 1.002),(control KR "3d" 0.7/2,4*freq)]
 
 -- p0 = PL "kick" Nothing
 
 perc :: UGen -> UGen
 perc k = control KR "amp" 0.8 * envGen AR 1 1 0 1 RemoveSynth (envPerc (control KR "attacco" 0) (control KR "discesa" 1 * 2/ k))
+percA k = control KR "amp" 0.8 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid (control KR "shape" 0) (control KR "skew" 0.5) (control KR "dur" 0.5) 1)
 
 keyb :: UGen
 keyb = control KR "amp" 0.5 * envGen AR 1 1 0 1 RemoveSynth (envTrapezoid 0 (control KR "attacco" 0 / 3) (control KR "discesa" 3 ) 1)
@@ -90,12 +92,12 @@ sino = out 0  .(\s -> pan2 s (0.05 * sinOsc KR 6 0) 1) $ perc 2 * (0.6 + (0.05 *
         where   freq = midiCPS $ control KR "freq" 45 + control KR "rate" 0
                 freqn n = midiCPS $ control KR "freq" 45 + control KR "rate" 0 + n
 
+removeSynth = cs $ n_free [3]
 
 bootSynths = do 
         cs . d_recv . synthdef "baz" $ baz 
         cs . d_recv . synthdef "bazzo" $ bazzo
         sleepThread 1
-        cs $ n_free [3]
         cs $ s_new "baz" 3 AddToTail 1 []
 --        cs $ s_new "baz" 4 AddToTail 1 []
 --        cs $ s_new "baz" 5 AddToTail 1 []

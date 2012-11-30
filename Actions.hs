@@ -9,64 +9,72 @@ import Sound.OpenSoundControl (sleepThreadUntil)
 import Control.Monad.Random (getRandomR, Random, evalRand, mkStdGen)
 import Data.Map.Strict (assocs, empty,lookup, Map, singleton, insert,filter, keys, member , (!), fromList)
 import System.Random (StdGen)
-import Data.Maybe (catMaybes)
-                        
+import Data.Maybe (catMaybes, fromMaybe)
+import Control                        
 
 
 type Tempo = Double
 
 type Params a = Map String a
-       
-data Resolve = Mul Double Resolve | Value String | Project String  | Based String String  deriving (Read,Show)    
+     
 
 data Action
         = Play 
-                Tempo -- ritardo
-                (Either String Int) -- synth name or instance
-                [(String,Resolve)] -- parameter resolution
-                Double -- top probability border
+                (Control String) -- ritardo
+                (Either String  Int) -- synth name or instance
+                [(String,Control String)] -- parameter resolution
+                (Control String) -- top probability border
         |  TParam 
                 String -- parameter name
-                Double -- max value
-                Double -- min value
+                (Control String) -- max value
+                (Control String) -- min value
         | SParam 
                 String -- parameter name
-                [(Double,Double)] -- choices for parameter values
-                 deriving (Show,Read)
-        
+                [(Control String,Double)] -- choices for parameter values
+                 deriving (Show,Read,Eq)
+
+instance Ord Action where
+        compare (Play _ _ _ c) (Play _ _ _ c') = compare c' c
+        compare (Play _ _ _ c) _ = LT
+        compare _ (Play _ _ _ c)  = GT
+        compare (TParam c _ _) (SParam c' _) = compare c c' 
+        compare (SParam c _ ) (TParam c' _ _)  = compare c c' 
+        compare (TParam c _ _) (TParam c' _ _) = compare c c' 
+        compare (SParam c _) (SParam c' _)  = compare c c' 
+         
+fromControl mp mv x y = fromMaybe x $ resolve mp mv y 
 type NoteOn =  Tempo -> Either String Int -> Params Double -> IO ()
+
+
 type Act = Int -> Double -> [Double] -> Tempo -> STM (IO ())
 
 actCollect :: [STM (IO ())] -> IO ()
 actCollect = join . fmap sequence_ . atomically . sequence
 
-lookup' x y = let 
-        ys' = (\ys -> zip ((0,0):ys) ys ) $ assocs y
-        ys'' = dropWhile (\((x1,y1),(x2,y2)) -> x2 < x) ys'
-        in case ys'' of
-                [] -> Nothing
-                (((x1,y1),(x2,y2)):_) -> Just $ y1 + (x - x1)/(x2 - x1) * (y2 - y1)
 
-render :: NoteOn -> TVar (Params Double)  -> TVar (Map Double Double) -> Action -> Act
-render noteon mv  mp (Play rit name res level) n v _ t = do 
-                        vs <- readTVar mv
-                        ps <- readTVar mp        
-                        let     f (Mul k v) = fmap (*k) $ f v
-                                f (Value v) = lookup v vs 
-                                f (Project i) = lookup i vs >>= flip lookup ps
-                                f (Based i1 i2) = lookup i1 vs >>= \b -> lookup i2 vs >>= \o -> lookup' (b + o) ps
-                        return . when (v >= level) $ noteon (t + rit) name . fromList . catMaybes . map (\(k,x) -> fmap ((,) k) $ f x) $ res 
-render _ mv _  (TParam paramname top bottom) _  v _ _ = do
-        modifyTVar mv $ insert paramname (bottom + v * (top - bottom))
+render :: NoteOn -> TVar (Params Double)  -> TVar (Map String [(Double,Double)]) -> Action -> Act
+render noteon tmv tmp (Play rit name res level) n v _ t = do 
+                        mv <- readTVar tmv
+                        mp <- readTVar tmp   
+                        return . when (v >= fromControl mp mv 0.5 level) $ noteon (t + fromControl mp mv 1 rit) name . fromList . catMaybes . map (\(k,x) -> fmap ((,) k) $ resolve mp mv  x) $ res 
+render _ tmv tmp  (TParam paramname top bottom) _  v _ _ = do
+        mv <- readTVar tmv
+        mp <- readTVar tmp        
+        modifyTVar tmv $ insert paramname (fromControl mp mv 0.5 bottom + v * (fromControl mp mv 0.5 top - fromControl mp mv 0.5 bottom))
         return (return ())
-render _ mv _  (SParam paramname choices) n v vs _ = do
+render _ tmv tmp  (SParam paramname choices) n v vs _ = do
+        mv <- readTVar tmv
+        mp <- readTVar tmp        
+        when (not $ null choices) $ do
                 let     l' = sum $ map snd choices
                         z = pickFrom choices (v/maximum vs*l')
-                modifyTVar mv . insert paramname $ z
-                return (return ())
+                modifyTVar tmv . insert paramname $ fromControl mp mv 0.5 z
+        return (return ())
 
+heado [] = error "ahi"
+heado x = head x
 pickFrom xs t =  let f s (x,y) = (s + y,(x , s + y))
-        in fst . head $ dropWhile ((<t) . snd) . snd . mapAccumL f 0 $ xs
+        in fst . heado $ dropWhile ((<t) . snd) . snd . mapAccumL f 0 $ xs
 
 pickFromM xs l = do
         t <- getRandomR (0,l)

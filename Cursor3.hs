@@ -26,10 +26,10 @@ dist n = elems . flip union (fromList $ zip [0..n-1] $ repeat 0) . fromListWith 
 mkDist :: Int -> Int -> StdGen -> Dist
 mkDist ps bu g = dist bu . flip evalRand g $ replicateM ps $ getRandomR (0,1)
 
+normalize :: Dist -> [Double]
+normalize = normalize' . map fromIntegral
 
-normalize :: Dist -> [Double] 
-normalize xs = let 
-        ys = map fromIntegral xs
+normalize' ys = let 
         mx = maximum ys
         mmx = minimum ys
         in map (\y -> (y - mmx)/(mx - mmx)) ys
